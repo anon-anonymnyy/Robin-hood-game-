@@ -1,0 +1,181 @@
+extends CanvasLayer
+# Сенсорное управление: джойстик слева, камера справа, кнопки прыжка и приседа.
+
+signal jump_pressed
+signal crouch_changed(is_crouching: bool)
+signal look_moved(amount: Vector2)
+
+const STICK_RADIUS := 110.0
+const KNOB_RADIUS := 46.0
+const DEAD_ZONE := 0.12
+const JUMP_RADIUS := 72.0
+const CROUCH_RADIUS := 58.0
+
+# Вектор движения: x вправо, y вперёд-назад (вверх по экрану = минус).
+var move_vector: Vector2 = Vector2.ZERO
+
+var _stick_id: int = -1
+var _look_id: int = -1
+var _stick_center: Vector2 = Vector2.ZERO
+var _stick_pos: Vector2 = Vector2.ZERO
+var _crouching: bool = false
+var _jump_flash: float = 0.0
+
+var _overlay = null
+var _info: Label
+var _hint: Label
+
+
+# Холст, на котором рисуются джойстик и кнопки.
+class Overlay extends Control:
+	var hud = null
+
+	func _draw() -> void:
+		if hud != null:
+			hud.draw_overlay(self)
+
+
+func _ready() -> void:
+	layer = 10
+
+	_overlay = Overlay.new()
+	_overlay.hud = self
+	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_overlay)
+
+	_info = Label.new()
+	_info.position = Vector2(24.0, 14.0)
+	_style_label(_info, 22)
+	add_child(_info)
+
+	_hint = Label.new()
+	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hint.text = "Слева — ходьба, справа — камера. Нижние кнопки справа: прыжок и присед."
+	_style_label(_hint, 20)
+	add_child(_hint)
+	get_tree().create_timer(12.0).timeout.connect(_hint.hide)
+
+
+func _notification(what: int) -> void:
+	# Если игру свернули посреди касания, сбрасываем джойстик, чтобы Робин не бежал сам.
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+		_stick_id = -1
+		_look_id = -1
+		move_vector = Vector2.ZERO
+
+
+func _style_label(l: Label, font_size: int) -> void:
+	l.add_theme_font_size_override("font_size", font_size)
+	l.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	l.add_theme_constant_override("outline_size", 5)
+
+
+func _vp() -> Vector2:
+	return get_viewport().get_visible_rect().size
+
+
+func _jump_center() -> Vector2:
+	var s := _vp()
+	return Vector2(s.x - 140.0, s.y - 170.0)
+
+
+func _crouch_center() -> Vector2:
+	var s := _vp()
+	return Vector2(s.x - 320.0, s.y - 105.0)
+
+
+func _rest_stick_center() -> Vector2:
+	var s := _vp()
+	return Vector2(210.0, s.y - 190.0)
+
+
+func _process(delta: float) -> void:
+	var vp := _vp()
+	_info.text = "Робин Гуд: Не тот кошелёк · тест 0.1 · %d FPS" % int(Engine.get_frames_per_second())
+	_hint.position = Vector2(0.0, vp.y - 70.0)
+	_hint.size = Vector2(vp.x, 40.0)
+	_jump_flash = maxf(_jump_flash - delta * 4.0, 0.0)
+	_overlay.queue_redraw()
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		var t := event as InputEventScreenTouch
+		if t.pressed:
+			_touch_down(t.index, t.position)
+		else:
+			_touch_up(t.index)
+	elif event is InputEventScreenDrag:
+		var d := event as InputEventScreenDrag
+		_touch_drag(d.index, d.position, d.relative)
+
+
+func _touch_down(id: int, pos: Vector2) -> void:
+	if pos.distance_to(_jump_center()) <= JUMP_RADIUS:
+		_jump_flash = 1.0
+		jump_pressed.emit()
+		return
+	if pos.distance_to(_crouch_center()) <= CROUCH_RADIUS:
+		_crouching = not _crouching
+		crouch_changed.emit(_crouching)
+		return
+	if pos.x < _vp().x * 0.5:
+		if _stick_id == -1:
+			_stick_id = id
+			_stick_center = pos
+			_stick_pos = pos
+			move_vector = Vector2.ZERO
+	else:
+		if _look_id == -1:
+			_look_id = id
+
+
+func _touch_up(id: int) -> void:
+	if id == _stick_id:
+		_stick_id = -1
+		move_vector = Vector2.ZERO
+	elif id == _look_id:
+		_look_id = -1
+
+
+func _touch_drag(id: int, pos: Vector2, rel: Vector2) -> void:
+	if id == _stick_id:
+		var off := pos - _stick_center
+		if off.length() > STICK_RADIUS:
+			off = off.normalized() * STICK_RADIUS
+		_stick_pos = _stick_center + off
+		var v := off / STICK_RADIUS
+		if v.length() < DEAD_ZONE:
+			v = Vector2.ZERO
+		move_vector = v
+	elif id == _look_id:
+		look_moved.emit(rel)
+
+
+# Вызывается из Overlay во время отрисовки.
+func draw_overlay(c: Control) -> void:
+	# Джойстик
+	if _stick_id != -1:
+		c.draw_circle(_stick_center, STICK_RADIUS, Color(1, 1, 1, 0.10))
+		c.draw_arc(_stick_center, STICK_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.40), 3.0)
+		c.draw_circle(_stick_pos, KNOB_RADIUS, Color(1, 1, 1, 0.45))
+	else:
+		var rest := _rest_stick_center()
+		c.draw_circle(rest, STICK_RADIUS, Color(1, 1, 1, 0.05))
+		c.draw_arc(rest, STICK_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.22), 3.0)
+		c.draw_circle(rest, KNOB_RADIUS, Color(1, 1, 1, 0.14))
+
+	# Кнопка прыжка
+	var jc := _jump_center()
+	c.draw_circle(jc, JUMP_RADIUS, Color(1, 1, 1, 0.14 + _jump_flash * 0.3))
+	c.draw_arc(jc, JUMP_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
+	c.draw_colored_polygon(PackedVector2Array([jc + Vector2(0, -26), jc + Vector2(26, 16), jc + Vector2(-26, 16)]), Color(1, 1, 1, 0.8))
+
+	# Кнопка приседа (горит жёлтым, пока Робин присел)
+	var cc := _crouch_center()
+	var fill := Color(1.0, 0.85, 0.3, 0.45) if _crouching else Color(1, 1, 1, 0.14)
+	c.draw_circle(cc, CROUCH_RADIUS, fill)
+	c.draw_arc(cc, CROUCH_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
+	c.draw_colored_polygon(PackedVector2Array([cc + Vector2(-22, -14), cc + Vector2(22, -14), cc + Vector2(0, 20)]), Color(1, 1, 1, 0.8))
