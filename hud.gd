@@ -24,6 +24,12 @@ var _jump_flash: float = 0.0
 var _overlay = null
 var _info: Label
 var _hint: Label
+var _light: Label
+var _obj: Label
+var _msg: Label
+var _msg_time: float = 0.0
+var suspicion: float = 0.0
+var _lit: bool = false
 
 
 # Холст, на котором рисуются джойстик и кнопки.
@@ -51,10 +57,53 @@ func _ready() -> void:
 
 	_hint = Label.new()
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_hint.text = "Слева — ходьба, справа — камера. Нижние кнопки справа: прыжок и присед."
+	_hint.text = "Присядь и держись в тени: на свету тебя видно издалека. Цель — ворота на юге."
 	_style_label(_hint, 20)
 	add_child(_hint)
-	get_tree().create_timer(12.0).timeout.connect(_hint.hide)
+	get_tree().create_timer(14.0).timeout.connect(_hint.hide)
+
+	_light = Label.new()
+	_light.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(_light, 20)
+	add_child(_light)
+
+	_obj = Label.new()
+	_obj.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(_obj, 20)
+	add_child(_obj)
+
+	_msg = Label.new()
+	_msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_msg.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_style_label(_msg, 34)
+	_msg.visible = false
+	add_child(_msg)
+
+
+func set_suspicion(v: float) -> void:
+	suspicion = v
+
+
+func set_lit(b: bool) -> void:
+	if b == _lit and _light.text != "":
+		return
+	_lit = b
+	if b:
+		_light.text = "На свету: тебя видно издалека"
+		_light.add_theme_color_override("font_color", Color(1.0, 0.75, 0.35))
+	else:
+		_light.text = "В тени"
+		_light.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+
+
+func set_objective(text: String) -> void:
+	_obj.text = text
+
+
+func show_message(text: String, seconds: float) -> void:
+	_msg.text = text
+	_msg_time = seconds
 
 
 func _notification(what: int) -> void:
@@ -93,9 +142,17 @@ func _rest_stick_center() -> Vector2:
 
 func _process(delta: float) -> void:
 	var vp := _vp()
-	_info.text = "Тест 0.3 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
+	_info.text = "Тест 0.4 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
 	_hint.position = Vector2(0.0, vp.y - 70.0)
 	_hint.size = Vector2(vp.x, 40.0)
+	_light.position = Vector2(0.0, 40.0)
+	_light.size = Vector2(vp.x, 28.0)
+	_obj.position = Vector2(0.0, 70.0)
+	_obj.size = Vector2(vp.x, 28.0)
+	_msg_time = maxf(_msg_time - delta, 0.0)
+	_msg.visible = _msg_time > 0.0
+	_msg.position = Vector2(vp.x * 0.15, vp.y * 0.28)
+	_msg.size = Vector2(vp.x * 0.7, 120.0)
 	_jump_flash = maxf(_jump_flash - delta * 4.0, 0.0)
 	_overlay.queue_redraw()
 
@@ -156,6 +213,14 @@ func _touch_drag(id: int, pos: Vector2, rel: Vector2) -> void:
 
 # Вызывается из Overlay во время отрисовки.
 func draw_overlay(c: Control) -> void:
+	# Шкала подозрения стражи (вверху по центру)
+	if suspicion > 0.01:
+		var bw := 360.0
+		var bx := _vp().x * 0.5 - bw * 0.5
+		var s := clampf(suspicion, 0.0, 1.0)
+		c.draw_rect(Rect2(bx - 3.0, 11.0, bw + 6.0, 24.0), Color(0, 0, 0, 0.45))
+		c.draw_rect(Rect2(bx, 14.0, bw * s, 18.0), Color(1.0, 0.9, 0.3).lerp(Color(1.0, 0.15, 0.1), s))
+
 	# Джойстик
 	if _stick_id != -1:
 		c.draw_circle(_stick_center, STICK_RADIUS, Color(1, 1, 1, 0.10))

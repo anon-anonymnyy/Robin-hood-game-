@@ -1,9 +1,12 @@
 extends Node3D
-# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.1.
-# Двор Ноттингемского замка ночью: ходьба, прыжок, присед, камера от третьего лица.
+# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.4.
+# Двор замка ночью: стража, свет и тень, цель миссии — ворота на юге.
 
 const PlayerScript = preload("res://player.gd")
 const HudScript = preload("res://hud.gd")
+const GuardScript = preload("res://guard.gd")
+
+const SPAWN := Vector3(0.0, 0.3, -12.5)
 
 const LOOK_SENSITIVITY := 0.006
 const PITCH_MIN := -1.2
@@ -13,8 +16,11 @@ var _player = null
 var _hud = null
 var _rig: Node3D
 var _pitch_node: Node3D
-var _yaw: float = 0.0
+var _yaw: float = PI
 var _pitch: float = -0.35
+var _guards: Array = []
+var _torches: Array = []
+var _won: bool = false
 
 
 func _ready() -> void:
@@ -23,6 +29,10 @@ func _ready() -> void:
 	_spawn_player()
 	_build_camera()
 	_build_hud()
+	_spawn_guards()
+	_build_goal()
+	_hud.set_objective("Цель: добеги до ворот на юге, не попавшись страже")
+	_hud.show_message("Робин, тебя застукали с печатью шерифа. Беги к воротам!", 6.0)
 
 
 func _process(delta: float) -> void:
@@ -34,6 +44,14 @@ func _process(delta: float) -> void:
 	_rig.rotation.y = _yaw
 	_pitch_node.rotation.x = _pitch
 
+	var worst := 0.0
+	if not _won:
+		for g in _guards:
+			var s: float = g.suspicion
+			worst = maxf(worst, s)
+	_hud.set_suspicion(worst)
+	_hud.set_lit(_player.is_lit())
+
 
 func _on_look_moved(rel: Vector2) -> void:
 	_yaw -= rel.x * LOOK_SENSITIVITY
@@ -44,8 +62,9 @@ func _on_look_moved(rel: Vector2) -> void:
 
 func _spawn_player() -> void:
 	_player = PlayerScript.new()
-	_player.position = Vector3(0.0, 0.3, 14.0)
+	_player.torch_positions = _torches
 	add_child(_player)
+	_player.respawn(SPAWN)
 
 
 func _build_camera() -> void:
@@ -81,6 +100,62 @@ func _build_hud() -> void:
 	_hud.connect("jump_pressed", Callable(_player, "queue_jump"))
 	_hud.connect("crouch_changed", Callable(_player, "set_crouch"))
 	_player.hud = _hud
+
+
+# ---------- Стража и цель миссии ----------
+
+func _spawn_guards() -> void:
+	var routes: Array = [
+		[Vector3(-16.0, 0.0, -2.0), Vector3(16.0, 0.0, -2.0)],
+		[Vector3(-14.0, 0.0, 13.5), Vector3(14.0, 0.0, 13.5), Vector3(14.0, 0.0, 19.5), Vector3(-14.0, 0.0, 19.5)],
+	]
+	for route in routes:
+		var first: Vector3 = route[0]
+		var g = GuardScript.new()
+		g.waypoints = route
+		g.player = _player
+		g.position = first + Vector3(0.0, 0.3, 0.0)
+		add_child(g)
+		g.caught.connect(_on_caught)
+		_guards.append(g)
+
+
+func _build_goal() -> void:
+	# Зелёная светящаяся полоса у ворот и невидимая зона, в которую нужно войти.
+	_add_deco(_box_mesh(Vector3(7.0, 0.04, 2.4)), Vector3(0.0, 0.04, 23.6), Color(0.3, 1.0, 0.4), true)
+	var area := Area3D.new()
+	area.collision_layer = 0
+	area.collision_mask = 2
+	area.position = Vector3(0.0, 2.0, 23.6)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(7.0, 4.0, 2.4)
+	cs.shape = shape
+	area.add_child(cs)
+	add_child(area)
+	area.body_entered.connect(_on_goal_entered)
+
+
+func _on_goal_entered(body: Node3D) -> void:
+	if body != _player or _won:
+		return
+	_won = true
+	for g in _guards:
+		g.active = false
+	_hud.show_message("Миссия 1 пройдена! Робин сбежал из замка с печатью шерифа.", 9.0)
+	_hud.set_objective("Тест миссии 1 завершён")
+
+
+func _on_caught() -> void:
+	if _won:
+		return
+	_hud.show_message("Тебя поймали! Пробуем ещё раз.", 2.5)
+	_player.respawn(SPAWN)
+	_yaw = PI
+	_pitch = -0.35
+	_rig.global_position = SPAWN + Vector3(0.0, 1.5, 0.0)
+	for g in _guards:
+		g.reset()
 
 
 # ---------- Окружение: ночное небо, луна, туман ----------
@@ -183,6 +258,7 @@ func _build_world() -> void:
 
 
 func _add_torch(x: float, z: float) -> void:
+	_torches.append(Vector3(x, 0.0, z))
 	_add_cylinder(Vector3(x, 1.2, z), 0.12, 2.4, Color(0.25, 0.17, 0.10))
 	var flame := SphereMesh.new()
 	flame.radius = 0.2

@@ -9,10 +9,12 @@ const TURN_SPEED := 12.0
 const STAND_HEIGHT := 1.8
 const CROUCH_HEIGHT := 1.1
 const RADIUS := 0.35
+const LIT_RADIUS := 5.0
 
 var hud = null
 var cam_yaw: float = 0.0
 var crouching: bool = false
+var torch_positions: Array = []
 
 var _visual: Node3D
 var _col: CollisionShape3D
@@ -98,6 +100,28 @@ func _part(mesh: Mesh, color: Color, pos: Vector3, rot_deg: Vector3 = Vector3.ZE
 	mi.position = pos
 	mi.rotation_degrees = rot_deg
 	_visual.add_child(mi)
+
+
+func is_lit() -> bool:
+	for t in torch_positions:
+		var tp: Vector3 = t
+		if Vector2(tp.x - global_position.x, tp.z - global_position.z).length() < LIT_RADIUS:
+			return true
+	return false
+
+
+# Насколько заметен Робин: на свету и стоя — больше всего, в тени и присев — меньше всего.
+func visibility() -> float:
+	var v := 1.3 if is_lit() else 0.8
+	if crouching:
+		v *= 0.55
+	return v
+
+
+func respawn(pos: Vector3) -> void:
+	global_position = pos
+	velocity = Vector3.ZERO
+	_visual.rotation.y = PI
 
 
 func queue_jump() -> void:
