@@ -114,7 +114,7 @@ func _build_environment() -> void:
 	moon.rotation_degrees = Vector3(-50.0, 35.0, 0.0)
 	moon.shadow_enabled = true
 	moon.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	moon.directional_shadow_max_distance = 45.0
+	moon.directional_shadow_max_distance = 35.0
 	add_child(moon)
 
 
@@ -188,12 +188,34 @@ func _add_torch(x: float, z: float) -> void:
 	flame.radius = 0.2
 	flame.height = 0.4
 	_add_deco(flame, Vector3(x, 2.6, z), Color(1.0, 0.60, 0.20), true)
-	var light := OmniLight3D.new()
-	light.light_color = Color(1.0, 0.65, 0.30)
-	light.light_energy = 1.6
-	light.omni_range = 14.0
-	light.position = Vector3(x, 2.9, z)
-	add_child(light)
+	_add_light_pool(x, z)
+
+
+# Вместо дорогих источников света: тёплое пятно на земле под факелом (почти бесплатно для телефона).
+func _add_light_pool(x: float, z: float) -> void:
+	var grad := Gradient.new()
+	grad.colors = PackedColorArray([Color(1.0, 0.62, 0.28, 0.55), Color(1.0, 0.62, 0.28, 0.0)])
+	grad.offsets = PackedFloat32Array([0.0, 1.0])
+	var tex := GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	tex.width = 128
+	tex.height = 128
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_texture = tex
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(12.0, 12.0)
+	var mi := MeshInstance3D.new()
+	mi.mesh = plane
+	mi.material_override = mat
+	mi.position = Vector3(x, 0.06, z)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
 
 
 func _add_tree(x: float, z: float, s: float) -> void:
