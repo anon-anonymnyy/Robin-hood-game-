@@ -107,6 +107,7 @@ func _build_hud() -> void:
 func _spawn_guards() -> void:
 	var routes: Array = [
 		[Vector3(-16.0, 0.0, -2.0), Vector3(16.0, 0.0, -2.0)],
+		[Vector3(-4.0, 0.0, 4.0), Vector3(4.0, 0.0, 4.0), Vector3(4.0, 0.0, 11.0), Vector3(-4.0, 0.0, 11.0)],
 		[Vector3(-14.0, 0.0, 13.5), Vector3(14.0, 0.0, 13.5), Vector3(14.0, 0.0, 19.5), Vector3(-14.0, 0.0, 19.5)],
 	]
 	for route in routes:

@@ -5,12 +5,14 @@ signal caught
 
 enum State { PATROL, LOOK, ALERT }
 
-const VIEW_DISTANCE := 11.0      # дальность зрения при средней заметности Робина
-const VIEW_HALF_ANGLE := 38.0    # половина угла обзора, градусы
+const VIEW_DISTANCE := 12.0      # дальность зрения при средней заметности Робина
+const VIEW_HALF_ANGLE := 40.0    # половина угла обзора, градусы
 const CONE_SHOW_RADIUS := 10.0   # размер конуса на земле (только для показа)
 const PATROL_SPEED := 1.8
-const CHASE_SPEED := 4.2
+const CHASE_SPEED := 5.0
 const GRAVITY := 16.0
+const STEP_HEIGHT := 0.45
+const ALERT_RADIUS := 16.0
 const WAIT_TIME := 1.4
 const SUSPICION_DECAY := 0.35
 const GIVE_UP_TIME := 4.0
@@ -34,12 +36,18 @@ var _lost_timer: float = 0.0
 var _last_seen: Vector3 = Vector3.ZERO
 var _start_pos: Vector3 = Vector3.ZERO
 var _caught_sent: bool = false
+var _steer_sign: float = 1.0
+var _steer_dir: Vector3 = Vector3.ZERO
+var _steer_t: float = 0.0
+var _investigate_t: float = 0.0
 
 
 func _ready() -> void:
 	collision_layer = 4
 	collision_mask = 1
 	_start_pos = position
+	add_to_group("guards")
+	floor_snap_length = 0.5
 
 	var capsule := CapsuleShape3D.new()
 	capsule.radius = 0.35
@@ -77,6 +85,8 @@ func reset() -> void:
 	_lost_timer = 0.0
 	_wait = 0.0
 	_caught_sent = false
+	_steer_t = 0.0
+	_investigate_t = 0.0
 	_wp_index = 1 % maxi(waypoints.size(), 1)
 	_face_first_leg()
 
@@ -105,8 +115,10 @@ func _physics_process(delta: float) -> void:
 		_lost_timer = 0.0
 	else:
 		_lost_timer += delta
-		if state != State.ALERT and _lost_timer > 0.6:
+		if state != State.ALERT and _lost_timer > 0.6 and _investigate_t <= 0.0:
 			suspicion = maxf(suspicion - SUSPICION_DECAY * delta, 0.0)
+
+	_investigate_t = maxf(_investigate_t - delta, 0.0)
 
 	if state == State.ALERT:
 		if _lost_timer > GIVE_UP_TIME:
@@ -115,6 +127,7 @@ func _physics_process(delta: float) -> void:
 	elif suspicion >= 1.0:
 		state = State.ALERT
 		_lost_timer = 0.0
+		_alert_neighbors()
 	elif state == State.PATROL and suspicion > 0.25:
 		state = State.LOOK
 	elif state == State.LOOK and suspicion <= 0.05:
@@ -128,11 +141,14 @@ func _physics_process(delta: float) -> void:
 		look.y = 0.0
 		if look.length() > 0.1:
 			_turn_to(look, 5.0, delta)
+		# Услышал крик товарища: идёт проверять место, где Робина заметили.
+		if _investigate_t > 0.0 and look.length() > 1.5:
+			move_dir = _steer(look.normalized(), delta)
 	else:
 		var chase: Vector3 = _last_seen - global_position
 		chase.y = 0.0
 		if chase.length() > 0.5:
-			move_dir = chase.normalized()
+			move_dir = _steer(chase.normalized(), delta)
 			_turn_to(chase, 8.0, delta)
 
 	if state == State.ALERT and not _caught_sent:
@@ -143,12 +159,81 @@ func _physics_process(delta: float) -> void:
 			caught.emit()
 			return
 
-	var speed := CHASE_SPEED if state == State.ALERT else PATROL_SPEED
+	var speed := CHASE_SPEED if state == State.ALERT else (2.4 if _investigate_t > 0.0 else PATROL_SPEED)
 	velocity.x = move_dir.x * speed
 	velocity.z = move_dir.z * speed
+	_try_step_up(delta)
 	_apply_gravity(delta)
 	move_and_slide()
 	_update_visuals()
+
+
+# Другие стражники рядом слышат крик и идут проверять место, где Робина заметили.
+func hear(pos: Vector3) -> void:
+	_last_seen = pos
+	suspicion = maxf(suspicion, 0.8)
+	_investigate_t = 4.0
+
+
+func _alert_neighbors() -> void:
+	for n in get_tree().get_nodes_in_group("guards"):
+		var other = n
+		if other == self:
+			continue
+		var d: float = other.global_position.distance_to(global_position)
+		if d < ALERT_RADIUS and other.state != State.ALERT:
+			other.hear(_last_seen)
+
+
+# Путь свободен или упирается в низкую ступеньку, на которую можно подняться.
+func _blocked(motion: Vector3) -> bool:
+	if not test_move(global_transform, motion):
+		return false
+	var up := Vector3(0.0, STEP_HEIGHT, 0.0)
+	if not test_move(global_transform, up) and not test_move(global_transform.translated(up), motion.normalized() * 0.3):
+		return false
+	return true
+
+
+# Обходит препятствия (бочки, ящики): если прямо идти нельзя, отклоняется в сторону.
+func _steer(dir: Vector3, delta: float) -> Vector3:
+	# Выбранный обход держим полсекунды, чтобы стражник не метался у бочек.
+	if _steer_t > 0.0:
+		_steer_t -= delta
+		if not _blocked(_steer_dir * 0.8):
+			return _steer_dir
+		_steer_t = 0.0
+	if not _blocked(dir * 0.8):
+		return dir
+	for k in [0.5, 1.0, 1.5, 2.2]:
+		var ang: float = k * _steer_sign
+		var d := dir.rotated(Vector3.UP, ang)
+		if not _blocked(d * 0.8):
+			_steer_dir = d
+			_steer_t = 0.5
+			return d
+		d = dir.rotated(Vector3.UP, -ang)
+		if not _blocked(d * 0.8):
+			_steer_sign = -_steer_sign
+			_steer_dir = d
+			_steer_t = 0.5
+			return d
+	return Vector3.ZERO
+
+
+# Поднимается на ступеньки высотой до STEP_HEIGHT.
+func _try_step_up(delta: float) -> void:
+	var motion := Vector3(velocity.x, 0.0, velocity.z) * delta
+	if motion.length() < 0.001 or not is_on_floor():
+		return
+	if test_move(global_transform, motion):
+		var up := Vector3(0.0, STEP_HEIGHT, 0.0)
+		if not test_move(global_transform, up) and not test_move(global_transform.translated(up), motion):
+			var n := motion.normalized() * 0.15
+			if not test_move(global_transform.translated(up), n):
+				global_position += up + n
+			else:
+				global_position += up
 
 
 func _apply_gravity(delta: float) -> void:
@@ -181,7 +266,7 @@ func _patrol_step(delta: float) -> Vector3:
 	var target := atan2(-d.x, -d.z)
 	if absf(angle_difference(_yaw, target)) > 0.6:
 		return Vector3.ZERO
-	return d.normalized()
+	return _steer(d.normalized(), delta)
 
 
 # Скорость набора подозрения: 0 — не видит, иначе от 0.5 (далеко) до 2.2 (вплотную) в секунду.

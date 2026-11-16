@@ -142,7 +142,7 @@ func _rest_stick_center() -> Vector2:
 
 func _process(delta: float) -> void:
 	var vp := _vp()
-	_info.text = "Тест 0.4 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
+	_info.text = "Тест 0.5 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
 	_hint.position = Vector2(0.0, vp.y - 70.0)
 	_hint.size = Vector2(vp.x, 40.0)
 	_light.position = Vector2(0.0, 40.0)
