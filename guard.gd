@@ -109,10 +109,17 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var rate := _detect()
+	var heard := _hear()
 	if rate > 0.0:
 		suspicion = minf(suspicion + rate * delta, 1.0)
 		_last_seen = player.global_position
 		_lost_timer = 0.0
+	elif heard > 0.0 and state != State.ALERT:
+		# Только слышит: идёт проверять шум, но тревогу поднимает лишь увидев Робина.
+		_last_seen = player.global_position
+		suspicion = maxf(suspicion, minf(suspicion + heard * delta, 0.9))
+		_lost_timer = 0.0
+		_investigate_t = maxf(_investigate_t, 2.5)
 	else:
 		_lost_timer += delta
 		if state != State.ALERT and _lost_timer > 0.6 and _investigate_t <= 0.0:
@@ -267,6 +274,19 @@ func _patrol_step(delta: float) -> Vector3:
 	if absf(angle_difference(_yaw, target)) > 0.6:
 		return Vector3.ZERO
 	return _steer(d.normalized(), delta)
+
+
+# Слух: чем ближе и громче шаги Робина, тем быстрее растёт подозрение (от 0.4 до 1.6 в секунду).
+func _hear() -> float:
+	var r: float = player.noise_radius()
+	if r <= 0.0:
+		return 0.0
+	var dx: float = player.global_position.x - global_position.x
+	var dz: float = player.global_position.z - global_position.z
+	var dist := sqrt(dx * dx + dz * dz)
+	if dist > r:
+		return 0.0
+	return lerpf(0.4, 1.6, clampf(1.0 - dist / r, 0.0, 1.0))
 
 
 # Скорость набора подозрения: 0 — не видит, иначе от 0.5 (далеко) до 2.2 (вплотную) в секунду.

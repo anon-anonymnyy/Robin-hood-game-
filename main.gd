@@ -50,7 +50,7 @@ func _process(delta: float) -> void:
 			var s: float = g.suspicion
 			worst = maxf(worst, s)
 	_hud.set_suspicion(worst)
-	_hud.set_lit(_player.is_lit())
+	_hud.set_state(_player.is_lit(), _player.noise_level())
 
 
 func _on_look_moved(rel: Vector2) -> void:
@@ -106,7 +106,8 @@ func _build_hud() -> void:
 
 func _spawn_guards() -> void:
 	var routes: Array = [
-		[Vector3(-16.0, 0.0, -2.0), Vector3(16.0, 0.0, -2.0)],
+		[Vector3(-6.0, 0.0, -2.0), Vector3(16.0, 0.0, -2.0), Vector3(-16.0, 0.0, -2.0)],
+		[Vector3(0.0, 0.0, 15.5), Vector3(0.0, 0.0, 21.0)],
 		[Vector3(-4.0, 0.0, 4.0), Vector3(4.0, 0.0, 4.0), Vector3(4.0, 0.0, 11.0), Vector3(-4.0, 0.0, 11.0)],
 		[Vector3(-14.0, 0.0, 13.5), Vector3(14.0, 0.0, 13.5), Vector3(14.0, 0.0, 19.5), Vector3(-14.0, 0.0, 19.5)],
 	]

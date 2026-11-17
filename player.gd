@@ -118,6 +118,28 @@ func visibility() -> float:
 	return v
 
 
+# Шум шагов для интерфейса: 0 — тихо, 1 — шаги слышно рядом, 2 — бег слышно издалека.
+func noise_level() -> int:
+	var sp := Vector2(velocity.x, velocity.z).length()
+	if sp < 0.3 or crouching:
+		return 0
+	if sp < 3.4:
+		return 1
+	return 2
+
+
+# Радиус (в метрах), в котором стражник слышит Робина.
+func noise_radius() -> float:
+	var sp := Vector2(velocity.x, velocity.z).length()
+	if sp < 0.3:
+		return 0.0
+	if crouching:
+		return 0.0
+	if sp < 3.4:
+		return 5.0
+	return 11.0
+
+
 func respawn(pos: Vector3) -> void:
 	global_position = pos
 	velocity = Vector3.ZERO

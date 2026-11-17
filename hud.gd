@@ -30,6 +30,7 @@ var _msg: Label
 var _msg_time: float = 0.0
 var suspicion: float = 0.0
 var _lit: bool = false
+var _noise: int = -1
 
 
 # Холст, на котором рисуются джойстик и кнопки.
@@ -57,7 +58,7 @@ func _ready() -> void:
 
 	_hint = Label.new()
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_hint.text = "Присядь и держись в тени: на свету тебя видно издалека. Цель — ворота на юге."
+	_hint.text = "Бег шумит: стража слышит тебя даже за спиной. Крадись: присядь или слабее наклоняй стик. Цель — ворота на юге."
 	_style_label(_hint, 20)
 	add_child(_hint)
 	get_tree().create_timer(14.0).timeout.connect(_hint.hide)
@@ -85,16 +86,20 @@ func set_suspicion(v: float) -> void:
 	suspicion = v
 
 
-func set_lit(b: bool) -> void:
-	if b == _lit and _light.text != "":
+func set_state(lit: bool, noise: int) -> void:
+	if lit == _lit and noise == _noise and _light.text != "":
 		return
-	_lit = b
-	if b:
-		_light.text = "На свету: тебя видно издалека"
-		_light.add_theme_color_override("font_color", Color(1.0, 0.75, 0.35))
-	else:
-		_light.text = "В тени"
-		_light.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+	_lit = lit
+	_noise = noise
+	var words := "На свету" if lit else "В тени"
+	var sound := "тихо"
+	if noise == 1:
+		sound = "шаги слышно рядом"
+	elif noise == 2:
+		sound = "ШУМНО: слышно издалека"
+	_light.text = words + " · " + sound
+	var warm := lit or noise == 2
+	_light.add_theme_color_override("font_color", Color(1.0, 0.75, 0.35) if warm else Color(0.6, 0.8, 1.0))
 
 
 func set_objective(text: String) -> void:
@@ -142,7 +147,7 @@ func _rest_stick_center() -> Vector2:
 
 func _process(delta: float) -> void:
 	var vp := _vp()
-	_info.text = "Тест 0.5 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
+	_info.text = "Тест 0.5.1 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
 	_hint.position = Vector2(0.0, vp.y - 70.0)
 	_hint.size = Vector2(vp.x, 40.0)
 	_light.position = Vector2(0.0, 40.0)
