@@ -4,12 +4,17 @@ extends CanvasLayer
 signal jump_pressed
 signal crouch_changed(is_crouching: bool)
 signal look_moved(amount: Vector2)
+signal aim_toggled(on: bool)
+signal fire_pressed
+signal arrow_type_changed(arrow_type: int)
 
 const STICK_RADIUS := 110.0
 const KNOB_RADIUS := 46.0
 const DEAD_ZONE := 0.12
 const JUMP_RADIUS := 72.0
 const CROUCH_RADIUS := 58.0
+const BOW_RADIUS := 58.0
+const TYPE_RADIUS := 50.0
 
 # Вектор движения: x вправо, y вперёд-назад (вверх по экрану = минус).
 var move_vector: Vector2 = Vector2.ZERO
@@ -31,6 +36,13 @@ var _msg_time: float = 0.0
 var suspicion: float = 0.0
 var _lit: bool = false
 var _noise: int = -1
+var _aiming: bool = false
+var _arrow_type: int = 0
+var _crosshair_hot: bool = false
+var _bow_lbl: Label
+var _type_lbl: Label
+var _fire_lbl: Label
+var _ammo_lbl: Label
 
 
 # Холст, на котором рисуются джойстик и кнопки.
@@ -58,7 +70,7 @@ func _ready() -> void:
 
 	_hint = Label.new()
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_hint.text = "Бег шумит: стража слышит тебя даже за спиной. Крадись: присядь или слабее наклоняй стик. Цель — ворота на юге."
+	_hint.text = "Бег шумит: стража слышит тебя. Крадись: присядь или слабее наклоняй стик. «Лук» — прицел, «Огонь» — выстрел. Цель — ворота на юге."
 	_style_label(_hint, 20)
 	add_child(_hint)
 	get_tree().create_timer(14.0).timeout.connect(_hint.hide)
@@ -81,6 +93,15 @@ func _ready() -> void:
 	_msg.visible = false
 	add_child(_msg)
 
+	_bow_lbl = _make_button_label("Лук")
+	_type_lbl = _make_button_label("Обычная")
+	_fire_lbl = _make_button_label("Огонь")
+	_fire_lbl.visible = false
+	_ammo_lbl = Label.new()
+	_ammo_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_style_label(_ammo_lbl, 20)
+	add_child(_ammo_lbl)
+
 
 func set_suspicion(v: float) -> void:
 	suspicion = v
@@ -102,6 +123,20 @@ func set_state(lit: bool, noise: int) -> void:
 	_light.add_theme_color_override("font_color", Color(1.0, 0.75, 0.35) if warm else Color(0.6, 0.8, 1.0))
 
 
+func set_ammo(normal: int, noise: int) -> void:
+	_ammo_lbl.text = "Стрелы: обычные %d · шумовые %d" % [normal, noise]
+
+
+func set_aim_hot(hot: bool) -> void:
+	_crosshair_hot = hot
+
+
+func cancel_aim() -> void:
+	if _aiming:
+		_aiming = false
+		aim_toggled.emit(false)
+
+
 func set_objective(text: String) -> void:
 	_obj.text = text
 
@@ -117,6 +152,22 @@ func _notification(what: int) -> void:
 		_stick_id = -1
 		_look_id = -1
 		move_vector = Vector2.ZERO
+
+
+func _make_button_label(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.size = Vector2(150.0, 30.0)
+	_style_label(l, 20)
+	add_child(l)
+	return l
+
+
+func _place_label(l: Label, center: Vector2) -> void:
+	l.size = Vector2(150.0, 30.0)
+	l.position = center - Vector2(75.0, 15.0)
 
 
 func _style_label(l: Label, font_size: int) -> void:
@@ -140,6 +191,16 @@ func _crouch_center() -> Vector2:
 	return Vector2(s.x - 320.0, s.y - 105.0)
 
 
+func _bow_center() -> Vector2:
+	var s := _vp()
+	return Vector2(s.x - 140.0, s.y - 345.0)
+
+
+func _type_center() -> Vector2:
+	var s := _vp()
+	return Vector2(s.x - 320.0, s.y - 250.0)
+
+
 func _rest_stick_center() -> Vector2:
 	var s := _vp()
 	return Vector2(210.0, s.y - 190.0)
@@ -147,7 +208,7 @@ func _rest_stick_center() -> Vector2:
 
 func _process(delta: float) -> void:
 	var vp := _vp()
-	_info.text = "Тест 0.5.1 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
+	_info.text = "Тест 0.6 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
 	_hint.position = Vector2(0.0, vp.y - 70.0)
 	_hint.size = Vector2(vp.x, 40.0)
 	_light.position = Vector2(0.0, 40.0)
@@ -159,6 +220,14 @@ func _process(delta: float) -> void:
 	_msg.position = Vector2(vp.x * 0.15, vp.y * 0.28)
 	_msg.size = Vector2(vp.x * 0.7, 120.0)
 	_jump_flash = maxf(_jump_flash - delta * 4.0, 0.0)
+	_place_label(_bow_lbl, _bow_center())
+	_place_label(_type_lbl, _type_center())
+	_place_label(_fire_lbl, _jump_center())
+	_fire_lbl.visible = _aiming
+	_bow_lbl.text = "Отмена" if _aiming else "Лук"
+	_type_lbl.text = "Шумовая" if _arrow_type == 1 else "Обычная"
+	_ammo_lbl.position = Vector2(vp.x - 524.0, 14.0)
+	_ammo_lbl.size = Vector2(500.0, 30.0)
 	_overlay.queue_redraw()
 
 
@@ -177,7 +246,18 @@ func _input(event: InputEvent) -> void:
 func _touch_down(id: int, pos: Vector2) -> void:
 	if pos.distance_to(_jump_center()) <= JUMP_RADIUS:
 		_jump_flash = 1.0
-		jump_pressed.emit()
+		if _aiming:
+			fire_pressed.emit()
+		else:
+			jump_pressed.emit()
+		return
+	if pos.distance_to(_bow_center()) <= BOW_RADIUS:
+		_aiming = not _aiming
+		aim_toggled.emit(_aiming)
+		return
+	if pos.distance_to(_type_center()) <= TYPE_RADIUS:
+		_arrow_type = (_arrow_type + 1) % 2
+		arrow_type_changed.emit(_arrow_type)
 		return
 	if pos.distance_to(_crouch_center()) <= CROUCH_RADIUS:
 		_crouching = not _crouching
@@ -241,7 +321,10 @@ func draw_overlay(c: Control) -> void:
 	var jc := _jump_center()
 	c.draw_circle(jc, JUMP_RADIUS, Color(1, 1, 1, 0.14 + _jump_flash * 0.3))
 	c.draw_arc(jc, JUMP_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
-	c.draw_colored_polygon(PackedVector2Array([jc + Vector2(0, -26), jc + Vector2(26, 16), jc + Vector2(-26, 16)]), Color(1, 1, 1, 0.8))
+	if _aiming:
+		c.draw_circle(jc, JUMP_RADIUS - 10.0, Color(0.9, 0.2, 0.15, 0.55))
+	else:
+		c.draw_colored_polygon(PackedVector2Array([jc + Vector2(0, -26), jc + Vector2(26, 16), jc + Vector2(-26, 16)]), Color(1, 1, 1, 0.8))
 
 	# Кнопка приседа (горит жёлтым, пока Робин присел)
 	var cc := _crouch_center()
@@ -249,3 +332,24 @@ func draw_overlay(c: Control) -> void:
 	c.draw_circle(cc, CROUCH_RADIUS, fill)
 	c.draw_arc(cc, CROUCH_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
 	c.draw_colored_polygon(PackedVector2Array([cc + Vector2(-22, -14), cc + Vector2(22, -14), cc + Vector2(0, 20)]), Color(1, 1, 1, 0.8))
+
+	# Кнопка лука (горит жёлтым в режиме прицеливания)
+	var bc := _bow_center()
+	c.draw_circle(bc, BOW_RADIUS, Color(1.0, 0.85, 0.3, 0.45) if _aiming else Color(1, 1, 1, 0.14))
+	c.draw_arc(bc, BOW_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
+
+	# Кнопка выбора стрелы (синяя — шумовая)
+	var tc := _type_center()
+	c.draw_circle(tc, TYPE_RADIUS, Color(0.5, 0.75, 1.0, 0.35) if _arrow_type == 1 else Color(1, 1, 1, 0.14))
+	c.draw_arc(tc, TYPE_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
+
+	# Прицел в центре экрана (краснеет, когда автоприцел поймал стражника)
+	if _aiming:
+		var mid := _vp() * 0.5
+		var col := Color(1.0, 0.25, 0.2, 0.95) if _crosshair_hot else Color(1, 1, 1, 0.85)
+		c.draw_arc(mid, 16.0, 0.0, TAU, 32, col, 3.0)
+		c.draw_circle(mid, 3.0, col)
+		c.draw_line(mid + Vector2(-30, 0), mid + Vector2(-20, 0), col, 3.0)
+		c.draw_line(mid + Vector2(20, 0), mid + Vector2(30, 0), col, 3.0)
+		c.draw_line(mid + Vector2(0, -30), mid + Vector2(0, -20), col, 3.0)
+		c.draw_line(mid + Vector2(0, 20), mid + Vector2(0, 30), col, 3.0)

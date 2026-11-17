@@ -1,12 +1,15 @@
 extends Node3D
-# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.4.
-# Двор замка ночью: стража, свет и тень, цель миссии — ворота на юге.
+# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.6.
+# Двор замка ночью: стража, свет и тень, лук с мишенями, цель миссии — ворота на юге.
 
 const PlayerScript = preload("res://player.gd")
 const HudScript = preload("res://hud.gd")
 const GuardScript = preload("res://guard.gd")
+const ArrowScript = preload("res://arrow.gd")
 
 const SPAWN := Vector3(0.0, 0.3, -12.5)
+const AMMO_NORMAL := 15
+const AMMO_NOISE := 5
 
 const LOOK_SENSITIVITY := 0.006
 const PITCH_MIN := -1.2
@@ -21,6 +24,17 @@ var _pitch: float = -0.35
 var _guards: Array = []
 var _torches: Array = []
 var _won: bool = false
+var _cam: Camera3D
+var _arm: SpringArm3D
+var _aiming: bool = false
+var _aim_t: float = 0.0
+var _arrow_type: int = 0
+var _ammo_normal: int = AMMO_NORMAL
+var _ammo_noise: int = AMMO_NOISE
+var _shot_cd: float = 0.0
+var _assist_on: bool = false
+var _assist_point: Vector3 = Vector3.ZERO
+var _target_hits: int = 0
 
 
 func _ready() -> void:
@@ -31,6 +45,8 @@ func _ready() -> void:
 	_build_hud()
 	_spawn_guards()
 	_build_goal()
+	_build_targets()
+	_hud.set_ammo(_ammo_normal, _ammo_noise)
 	_hud.set_objective("Цель: добеги до ворот на юге, не попавшись страже")
 	_hud.show_message("Робин, тебя застукали с печатью шерифа. Беги к воротам!", 6.0)
 
@@ -44,6 +60,16 @@ func _process(delta: float) -> void:
 	_rig.rotation.y = _yaw
 	_pitch_node.rotation.x = _pitch
 
+	# Прицеливание: камера приближается и уходит за правое плечо.
+	_shot_cd = maxf(_shot_cd - delta, 0.0)
+	_aim_t = move_toward(_aim_t, 1.0 if _aiming else 0.0, delta * 6.0)
+	_arm.spring_length = lerpf(6.0, 3.0, _aim_t)
+	_arm.position.x = 0.8 * _aim_t
+	_cam.fov = lerpf(70.0, 52.0, _aim_t)
+	if _aiming:
+		_update_assist()
+	_hud.set_aim_hot(_aiming and _assist_on)
+
 	var worst := 0.0
 	if not _won:
 		for g in _guards:
@@ -54,8 +80,9 @@ func _process(delta: float) -> void:
 
 
 func _on_look_moved(rel: Vector2) -> void:
-	_yaw -= rel.x * LOOK_SENSITIVITY
-	_pitch = clampf(_pitch - rel.y * LOOK_SENSITIVITY, PITCH_MIN, PITCH_MAX)
+	var k := LOOK_SENSITIVITY * (0.55 if _aiming else 1.0)
+	_yaw -= rel.x * k
+	_pitch = clampf(_pitch - rel.y * k, PITCH_MIN, PITCH_MAX)
 
 
 # ---------- Игрок, камера, интерфейс ----------
@@ -84,6 +111,7 @@ func _build_camera() -> void:
 	sphere.radius = 0.3
 	arm.shape = sphere
 	_pitch_node.add_child(arm)
+	_arm = arm
 
 	var cam := Camera3D.new()
 	cam.near = 0.1
@@ -91,6 +119,7 @@ func _build_camera() -> void:
 	cam.fov = 70.0
 	arm.add_child(cam)
 	cam.current = true
+	_cam = cam
 
 
 func _build_hud() -> void:
@@ -99,7 +128,171 @@ func _build_hud() -> void:
 	_hud.connect("look_moved", _on_look_moved)
 	_hud.connect("jump_pressed", Callable(_player, "queue_jump"))
 	_hud.connect("crouch_changed", Callable(_player, "set_crouch"))
+	_hud.connect("aim_toggled", _on_aim_toggled)
+	_hud.connect("fire_pressed", _fire)
+	_hud.connect("arrow_type_changed", _on_arrow_type)
 	_player.hud = _hud
+
+
+# ---------- Лук ----------
+
+func _on_aim_toggled(on: bool) -> void:
+	_aiming = on
+	_player.aiming = on
+
+
+func _on_arrow_type(t: int) -> void:
+	_arrow_type = t
+
+
+# Автоприцел: если рядом с перекрестием виден стражник, целимся ему в грудь.
+func _update_assist() -> void:
+	_assist_on = false
+	var from: Vector3 = _cam.global_position
+	var fwd: Vector3 = -_cam.global_transform.basis.z
+	var best := deg_to_rad(5.0)
+	for g in _guards:
+		var chest: Vector3 = g.global_position + Vector3(0.0, 1.1, 0.0)
+		var to: Vector3 = chest - from
+		var d := to.length()
+		if d < 1.0 or d > 45.0:
+			continue
+		var ang := fwd.angle_to(to)
+		if ang >= best:
+			continue
+		var query := PhysicsRayQueryParameters3D.create(from, chest, 1)
+		if not get_world_3d().direct_space_state.intersect_ray(query).is_empty():
+			continue
+		best = ang
+		_assist_on = true
+		_assist_point = chest
+
+
+func _fire() -> void:
+	if not _aiming or _shot_cd > 0.0 or _won:
+		return
+	var noisy := _arrow_type == 1
+	if (_ammo_noise if noisy else _ammo_normal) <= 0:
+		_hud.show_message("Стрелы этого типа кончились", 1.5)
+		return
+	if noisy:
+		_ammo_noise -= 1
+	else:
+		_ammo_normal -= 1
+	_hud.set_ammo(_ammo_normal, _ammo_noise)
+	_shot_cd = 0.45
+
+	# Целимся туда, куда смотрит перекрестие камеры, и учитываем падение стрелы на лету.
+	var from: Vector3 = _cam.global_position
+	var fwd: Vector3 = -_cam.global_transform.basis.z
+	var aim_pt: Vector3 = from + fwd * 60.0
+	var hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, aim_pt, 5))
+	if not hit.is_empty():
+		aim_pt = hit["position"]
+	if _assist_on:
+		aim_pt = _assist_point
+
+	var head_dir := Vector3(-sin(_yaw), 0.0, -cos(_yaw))
+	var chest: Vector3 = _player.global_position + Vector3(0.0, 1.35, 0.0)
+	var start: Vector3 = chest + head_dir * 0.7
+	var wall := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(chest, start, 1))
+	if not wall.is_empty():
+		start = chest
+	var flight := start.distance_to(aim_pt) / ArrowScript.SPEED
+	aim_pt.y += 0.5 * ArrowScript.GRAVITY * flight * flight
+	var dir := (aim_pt - start).normalized()
+
+	var arrow = ArrowScript.new()
+	arrow.setup(start, dir * ArrowScript.SPEED, _arrow_type)
+	add_child(arrow)
+	arrow.hit_something.connect(_on_arrow_hit)
+
+
+func _on_arrow_hit(collider, pos: Vector3, kind: int) -> void:
+	var radius := 22.0 if kind == 1 else 6.0
+	if collider != null and collider.is_in_group("guards"):
+		collider.stun()
+		radius = maxf(radius, 9.0)
+	elif collider != null and collider.is_in_group("targets"):
+		_target_hit(collider)
+		return
+	_make_noise(pos, radius, collider)
+
+
+# Удар стрелы слышат стражники в радиусе: они идут проверять место удара.
+func _make_noise(pos: Vector3, radius: float, skip) -> void:
+	for g in _guards:
+		if g == skip:
+			continue
+		var d: float = g.global_position.distance_to(pos)
+		if d < radius:
+			g.hear(pos)
+
+
+func _target_hit(body: Node) -> void:
+	_target_hits += 1
+	if body.has_meta("mat"):
+		var m: StandardMaterial3D = body.get_meta("mat")
+		var home := Color(0.9, 0.8, 0.25)
+		m.albedo_color = Color(0.3, 1.0, 0.4)
+		m.emission = Color(0.3, 1.0, 0.4)
+		if body.has_meta("tween"):
+			var old: Tween = body.get_meta("tween")
+			if old != null and old.is_valid():
+				old.kill()
+		var tw := create_tween()
+		tw.tween_property(m, "albedo_color", home, 0.8)
+		tw.parallel().tween_property(m, "emission", home, 0.8)
+		body.set_meta("tween", tw)
+	if not _won:
+		_hud.show_message("В яблочко! Мишеней поражено: %d" % _target_hits, 1.2)
+
+
+# Три мишени у донжона для пристрелки (удар по мишени стража не слышит).
+func _build_targets() -> void:
+	var spots: Array = [Vector3(-7.0, 1.5, -8.5), Vector3(0.0, 1.5, -6.0), Vector3(7.0, 1.5, -8.5)]
+	for s in spots:
+		var p: Vector3 = s
+		var body := StaticBody3D.new()
+		body.position = p
+		# Диск повёрнут лицом на север, к стартовой точке Робина.
+		body.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+		body.add_to_group("targets")
+
+		var rings: Array = [[0.7, 0.0, Color(0.88, 0.88, 0.82)], [0.45, 0.03, Color(0.85, 0.15, 0.12)], [0.2, 0.06, Color(0.9, 0.8, 0.25)]]
+		for r in rings:
+			var radius: float = r[0]
+			var off: float = r[1]
+			var col: Color = r[2]
+			var mesh := CylinderMesh.new()
+			mesh.top_radius = radius
+			mesh.bottom_radius = radius
+			mesh.height = 0.08
+			mesh.radial_segments = 24
+			mesh.rings = 1
+			var mat := _material(col)
+			if radius < 0.3:
+				mat.emission_enabled = true
+				mat.emission = col
+				mat.emission_energy_multiplier = 1.0
+				body.set_meta("mat", mat)
+			var mi := MeshInstance3D.new()
+			mi.mesh = mesh
+			mi.material_override = mat
+			mi.position = Vector3(0.0, off, 0.0)
+			body.add_child(mi)
+
+		var cs := CollisionShape3D.new()
+		var shape := CylinderShape3D.new()
+		shape.radius = 0.7
+		shape.height = 0.16
+		cs.shape = shape
+		cs.position = Vector3(0.0, 0.03, 0.0)
+		body.add_child(cs)
+		add_child(body)
+
+		var post := _cyl_mesh(0.06, 0.06, 1.5, 8)
+		_add_deco(post, Vector3(p.x, 0.75, p.z + 0.2), Color(0.35, 0.24, 0.13))
 
 
 # ---------- Стража и цель миссии ----------
@@ -155,6 +348,10 @@ func _on_caught() -> void:
 	_player.respawn(SPAWN)
 	_yaw = PI
 	_pitch = -0.35
+	_hud.cancel_aim()
+	_ammo_normal = AMMO_NORMAL
+	_ammo_noise = AMMO_NOISE
+	_hud.set_ammo(_ammo_normal, _ammo_noise)
 	_rig.global_position = SPAWN + Vector3(0.0, 1.5, 0.0)
 	for g in _guards:
 		g.reset()

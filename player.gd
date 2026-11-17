@@ -10,16 +10,19 @@ const STAND_HEIGHT := 1.8
 const CROUCH_HEIGHT := 1.1
 const RADIUS := 0.35
 const LIT_RADIUS := 5.0
+const AIM_SPEED := 2.2
 
 var hud = null
 var cam_yaw: float = 0.0
 var crouching: bool = false
 var torch_positions: Array = []
+var aiming: bool = false
 
 var _visual: Node3D
 var _col: CollisionShape3D
 var _capsule: CapsuleShape3D
 var _jump_queued: bool = false
+var _bow: Node3D
 
 
 func _ready() -> void:
@@ -88,6 +91,36 @@ func _build_model() -> void:
 	var fletching := BoxMesh.new()
 	fletching.size = Vector3(0.12, 0.12, 0.04)
 	_part(fletching, Color(0.90, 0.88, 0.80), Vector3(0.0, 1.25, 0.3))
+
+	_build_bow()
+
+
+# Лук в левой руке: виден только в режиме прицеливания.
+func _build_bow() -> void:
+	_bow = Node3D.new()
+	_bow.position = Vector3(-0.38, 1.0, -0.3)
+	_bow.visible = false
+	_visual.add_child(_bow)
+	var wood := Color(0.42, 0.28, 0.14)
+	var limb := BoxMesh.new()
+	limb.size = Vector3(0.05, 0.5, 0.05)
+	_bow_part(limb, wood, Vector3(0.0, 0.22, 0.0), Vector3(-14.0, 0.0, 0.0))
+	_bow_part(limb, wood, Vector3(0.0, -0.22, 0.0), Vector3(14.0, 0.0, 0.0))
+	var cord := BoxMesh.new()
+	cord.size = Vector3(0.012, 0.86, 0.012)
+	_bow_part(cord, Color(0.9, 0.9, 0.85), Vector3(0.0, 0.0, 0.1), Vector3.ZERO)
+
+
+func _bow_part(mesh: Mesh, color: Color, pos: Vector3, rot_deg: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.roughness = 0.85
+	mi.material_override = mat
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	_bow.add_child(mi)
 
 
 func _part(mesh: Mesh, color: Color, pos: Vector3, rot_deg: Vector3 = Vector3.ZERO) -> void:
@@ -158,6 +191,7 @@ func set_crouch(on: bool) -> void:
 
 
 func _process(delta: float) -> void:
+	_bow.visible = aiming
 	var target_scale := 0.62 if crouching else 1.0
 	_visual.scale.y = lerpf(_visual.scale.y, target_scale, clampf(12.0 * delta, 0.0, 1.0))
 
@@ -170,6 +204,8 @@ func _physics_process(delta: float) -> void:
 	# Направление считаем относительно того, куда повёрнута камера.
 	var dir := Basis(Vector3.UP, cam_yaw) * Vector3(mv.x, 0.0, mv.y)
 	var speed := CROUCH_SPEED if crouching else WALK_SPEED
+	if aiming:
+		speed = minf(speed, AIM_SPEED)
 	velocity.x = dir.x * speed
 	velocity.z = dir.z * speed
 
@@ -184,7 +220,9 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
-	if dir.length() > 0.1:
+	if aiming:
+		_visual.rotation.y = lerp_angle(_visual.rotation.y, cam_yaw, clampf(TURN_SPEED * delta, 0.0, 1.0))
+	elif dir.length() > 0.1:
 		var target := atan2(-dir.x, -dir.z)
 		_visual.rotation.y = lerp_angle(_visual.rotation.y, target, clampf(TURN_SPEED * delta, 0.0, 1.0))
 

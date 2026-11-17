@@ -40,6 +40,7 @@ var _steer_sign: float = 1.0
 var _steer_dir: Vector3 = Vector3.ZERO
 var _steer_t: float = 0.0
 var _investigate_t: float = 0.0
+var _stun_t: float = 0.0
 
 
 func _ready() -> void:
@@ -87,6 +88,7 @@ func reset() -> void:
 	_caught_sent = false
 	_steer_t = 0.0
 	_investigate_t = 0.0
+	_stun_t = 0.0
 	_wp_index = 1 % maxi(waypoints.size(), 1)
 	_face_first_leg()
 
@@ -106,6 +108,21 @@ func _physics_process(delta: float) -> void:
 		_apply_gravity(delta)
 		move_and_slide()
 		_update_visuals()
+		return
+
+	if _stun_t > 0.0:
+		_stun_t -= delta
+		velocity.x = 0.0
+		velocity.z = 0.0
+		_apply_gravity(delta)
+		move_and_slide()
+		_update_visuals()
+		if _stun_t <= 0.0:
+			# Пришёл в себя: сразу смотрит в сторону стрелка.
+			state = State.PATROL
+			suspicion = 0.6
+			_lost_timer = 0.0
+			_last_seen = player.global_position
 		return
 
 	var rate := _detect()
@@ -180,6 +197,14 @@ func hear(pos: Vector3) -> void:
 	_last_seen = pos
 	suspicion = maxf(suspicion, 0.8)
 	_investigate_t = 4.0
+
+
+# Стрела попала в стражника: он оглушён на 5 секунд, ничего не видит и не слышит.
+func stun() -> void:
+	_stun_t = 5.0
+	state = State.PATROL
+	suspicion = 0.0
+	velocity = Vector3.ZERO
 
 
 func _alert_neighbors() -> void:
@@ -321,6 +346,7 @@ func _update_visuals() -> void:
 	elif suspicion > 0.02:
 		col = col.lerp(Color(1.0, 0.45, 0.1, 0.26), clampf(suspicion, 0.0, 1.0))
 	_cone_mat.albedo_color = col
+	_cone.visible = _stun_t <= 0.0
 
 	# Конус сжимается, когда Робин в тени или присел: показывает реальную дальность зрения.
 	if player != null:
@@ -329,7 +355,10 @@ func _update_visuals() -> void:
 		_cone.scale = _cone.scale.lerp(Vector3(k, 1.0, k), 0.2)
 
 	var t := ""
-	if state == State.ALERT:
+	if _stun_t > 0.0:
+		t = "Ой!"
+		_icon.modulate = Color(0.6, 0.85, 1.0)
+	elif state == State.ALERT:
 		t = "!"
 		_icon.modulate = Color(1.0, 0.2, 0.15)
 	elif state == State.LOOK:
