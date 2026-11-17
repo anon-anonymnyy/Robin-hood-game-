@@ -98,7 +98,8 @@ func _build_model() -> void:
 # Лук в левой руке: виден только в режиме прицеливания.
 func _build_bow() -> void:
 	_bow = Node3D.new()
-	_bow.position = Vector3(-0.38, 1.0, -0.3)
+	_bow.position = Vector3(-0.42, 1.05, -0.5)
+	_bow.scale = Vector3(1.5, 1.5, 1.5)
 	_bow.visible = false
 	_visual.add_child(_bow)
 	var wood := Color(0.42, 0.28, 0.14)

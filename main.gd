@@ -1,11 +1,14 @@
 extends Node3D
-# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.6.
+# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.7.
 # Двор замка ночью: стража, свет и тень, лук с мишенями, цель миссии — ворота на юге.
 
 const PlayerScript = preload("res://player.gd")
 const HudScript = preload("res://hud.gd")
 const GuardScript = preload("res://guard.gd")
 const ArrowScript = preload("res://arrow.gd")
+const DialogueScript = preload("res://dialogue.gd")
+
+const SAVE_PATH := "user://save.cfg"
 
 const SPAWN := Vector3(0.0, 0.3, -12.5)
 const AMMO_NORMAL := 15
@@ -35,6 +38,11 @@ var _shot_cd: float = 0.0
 var _assist_on: bool = false
 var _assist_point: Vector3 = Vector3.ZERO
 var _target_hits: int = 0
+var _dlg = null
+var _glory: int = 0
+var _shadow: int = 0
+var _caught_count: int = 0
+var _stuns: int = 0
 
 
 func _ready() -> void:
@@ -43,12 +51,13 @@ func _ready() -> void:
 	_spawn_player()
 	_build_camera()
 	_build_hud()
+	_build_dialogue()
 	_spawn_guards()
 	_build_goal()
 	_build_targets()
 	_hud.set_ammo(_ammo_normal, _ammo_noise)
 	_hud.set_objective("Цель: добеги до ворот на юге, не попавшись страже")
-	_hud.show_message("Робин, тебя застукали с печатью шерифа. Беги к воротам!", 6.0)
+	get_tree().create_timer(0.8).timeout.connect(_play_intro)
 
 
 func _process(delta: float) -> void:
@@ -64,7 +73,8 @@ func _process(delta: float) -> void:
 	_shot_cd = maxf(_shot_cd - delta, 0.0)
 	_aim_t = move_toward(_aim_t, 1.0 if _aiming else 0.0, delta * 6.0)
 	_arm.spring_length = lerpf(6.0, 3.0, _aim_t)
-	_arm.position.x = 0.8 * _aim_t
+	# Камера смещена влево: Робин стоит правее центра, лук в левой руке хорошо виден.
+	_arm.position.x = -0.9 * _aim_t
 	_cam.fov = lerpf(70.0, 52.0, _aim_t)
 	if _aiming:
 		_update_assist()
@@ -132,6 +142,92 @@ func _build_hud() -> void:
 	_hud.connect("fire_pressed", _fire)
 	_hud.connect("arrow_type_changed", _on_arrow_type)
 	_player.hud = _hud
+
+
+# ---------- Диалоги и выбор «Слава» / «Тень» ----------
+
+func _build_dialogue() -> void:
+	_dlg = DialogueScript.new()
+	add_child(_dlg)
+	_dlg.choice_made.connect(_on_choice_made)
+
+
+func _on_choice_made(effect: String) -> void:
+	if effect == "glory":
+		_glory += 1
+	elif effect == "shadow":
+		_shadow += 1
+
+
+func _after_dialogue() -> void:
+	_hud.reset_touches()
+
+
+func _play_intro() -> void:
+	var lines: Array = [
+		{"who": "Робин", "text": "Так, спокойно. Я Робин, лучший вор Ноттингема. Ладно, худший. Зато пока живой."},
+		{"who": "Робин", "text": "Лез за золотом, а схватил какой-то мешочек. А в нём печать шерифа. Он теперь очень, очень разозлится."},
+		{"who": "Робин", "text": "Весь двор в страже. Как будем выбираться?", "choices": [
+			{"text": "Эффектно! Пусть вся стража знает моё имя!", "effect": "glory", "reply": [
+				{"who": "Робин", "text": "Если уж убегать, то красиво. Желательно с поклоном."},
+			]},
+			{"text": "Тихо, как мышь. Никто и не заметит.", "effect": "shadow", "reply": [
+				{"who": "Робин", "text": "Тень не оставляет следов. Главное, не топать, как Малыш Джон."},
+			]},
+		]},
+		{"who": "Робин", "text": "Ворота на юге. Лук при мне, мишени во дворе есть. Можно размяться. Но недолго."},
+	]
+	_dlg.start(lines, _after_dialogue)
+
+
+func _play_caught_scene() -> void:
+	var lines: Array = [
+		{"who": "Гай", "text": "Попался! Наконец-то! Я почти... нет, правда, на этот раз я поймал!"},
+		{"who": "Робин", "text": "Почти не считается, Гай. Давай заново?"},
+	]
+	_dlg.start(lines, _after_dialogue)
+
+
+func _play_ending() -> void:
+	var lines: Array = [
+		{"who": "Мэриан", "text": "Робин?! Это печать шерифа?! Ты украл печать шерифа?!"},
+		{"who": "Робин", "text": "Украл, это громко сказано. Одолжил. Навсегда. Случайно."},
+		{"who": "Мэриан", "text": "И что ты собираешься с ней делать?", "choices": [
+			{"text": "Раздам бедным! Пусть весь Ноттингем узнает!", "effect": "glory", "reply": [
+				{"who": "Мэриан", "text": "Весь Ноттингем и вся стража заодно. Ты слышал слово «тайна»?"},
+				{"who": "Робин", "text": "Слышал. Не запомнил."},
+			]},
+			{"text": "Тихо использую. Налоги исчезнут, а шериф не поймёт куда.", "effect": "shadow", "reply": [
+				{"who": "Мэриан", "text": "Хм. Впервые план без дыр. Это подозрительно."},
+				{"who": "Робин", "text": "Я сам в шоке."},
+			]},
+		]},
+	]
+	_dlg.start(lines, _finish_mission)
+
+
+func _finish_mission() -> void:
+	_hud.reset_touches()
+	if _caught_count == 0:
+		_shadow += 1
+	if _stuns >= 2:
+		_glory += 1
+	var title := "Загадочный Робин: и шум, и тишина"
+	if _glory > _shadow:
+		title = "Громкий Робин: о нём говорит весь город"
+	elif _shadow > _glory:
+		title = "Робин-Тень: его почти никто не видел"
+	_hud.show_message("Миссия 1 пройдена!\nСлава %d · Тень %d\n%s" % [_glory, _shadow, title], 12.0)
+	_hud.set_objective("Тест миссии 1 завершён")
+	_save_progress()
+
+
+func _save_progress() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("progress", "mission1_done", true)
+	cfg.set_value("progress", "glory", _glory)
+	cfg.set_value("progress", "shadow", _shadow)
+	cfg.save(SAVE_PATH)
 
 
 # ---------- Лук ----------
@@ -212,6 +308,7 @@ func _on_arrow_hit(collider, pos: Vector3, kind: int) -> void:
 	var radius := 22.0 if kind == 1 else 6.0
 	if collider != null and collider.is_in_group("guards"):
 		collider.stun()
+		_stuns += 1
 		radius = maxf(radius, 9.0)
 	elif collider != null and collider.is_in_group("targets"):
 		_target_hit(collider)
@@ -337,14 +434,17 @@ func _on_goal_entered(body: Node3D) -> void:
 	_won = true
 	for g in _guards:
 		g.active = false
-	_hud.show_message("Миссия 1 пройдена! Робин сбежал из замка с печатью шерифа.", 9.0)
-	_hud.set_objective("Тест миссии 1 завершён")
+	_hud.cancel_aim()
+	call_deferred("_play_ending")
 
 
 func _on_caught() -> void:
 	if _won:
 		return
+	_caught_count += 1
 	_hud.show_message("Тебя поймали! Пробуем ещё раз.", 2.5)
+	if _caught_count == 1:
+		call_deferred("_play_caught_scene")
 	_player.respawn(SPAWN)
 	_yaw = PI
 	_pitch = -0.35

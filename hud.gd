@@ -70,7 +70,7 @@ func _ready() -> void:
 
 	_hint = Label.new()
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_hint.text = "Бег шумит: стража слышит тебя. Крадись: присядь или слабее наклоняй стик. «Лук» — прицел, «Огонь» — выстрел. Цель — ворота на юге."
+	_hint.text = "Бег шумит: стража слышит тебя. Крадись: присядь или слабее наклоняй стик. «Лук» — прицел, слева появится «Огонь». Цель — ворота на юге."
 	_style_label(_hint, 20)
 	add_child(_hint)
 	get_tree().create_timer(14.0).timeout.connect(_hint.hide)
@@ -201,6 +201,19 @@ func _type_center() -> Vector2:
 	return Vector2(s.x - 320.0, s.y - 250.0)
 
 
+# Кнопка «Огонь» слева над джойстиком (появляется только в прицеле).
+func _fire_center() -> Vector2:
+	var s := _vp()
+	return Vector2(150.0, s.y - 440.0)
+
+
+# После диалога (игра стояла на паузе) сбрасываем касания, чтобы стик не «залип».
+func reset_touches() -> void:
+	_stick_id = -1
+	_look_id = -1
+	move_vector = Vector2.ZERO
+
+
 func _rest_stick_center() -> Vector2:
 	var s := _vp()
 	return Vector2(210.0, s.y - 190.0)
@@ -208,7 +221,7 @@ func _rest_stick_center() -> Vector2:
 
 func _process(delta: float) -> void:
 	var vp := _vp()
-	_info.text = "Тест 0.6 · %d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
+	_info.text = "Тест 0.7 ·%d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
 	_hint.position = Vector2(0.0, vp.y - 70.0)
 	_hint.size = Vector2(vp.x, 40.0)
 	_light.position = Vector2(0.0, 40.0)
@@ -222,7 +235,7 @@ func _process(delta: float) -> void:
 	_jump_flash = maxf(_jump_flash - delta * 4.0, 0.0)
 	_place_label(_bow_lbl, _bow_center())
 	_place_label(_type_lbl, _type_center())
-	_place_label(_fire_lbl, _jump_center())
+	_place_label(_fire_lbl, _fire_center())
 	_fire_lbl.visible = _aiming
 	_bow_lbl.text = "Отмена" if _aiming else "Лук"
 	_type_lbl.text = "Шумовая" if _arrow_type == 1 else "Обычная"
@@ -244,12 +257,13 @@ func _input(event: InputEvent) -> void:
 
 
 func _touch_down(id: int, pos: Vector2) -> void:
+	if _aiming and pos.distance_to(_fire_center()) <= JUMP_RADIUS:
+		_jump_flash = 1.0
+		fire_pressed.emit()
+		return
 	if pos.distance_to(_jump_center()) <= JUMP_RADIUS:
 		_jump_flash = 1.0
-		if _aiming:
-			fire_pressed.emit()
-		else:
-			jump_pressed.emit()
+		jump_pressed.emit()
 		return
 	if pos.distance_to(_bow_center()) <= BOW_RADIUS:
 		_aiming = not _aiming
@@ -321,10 +335,14 @@ func draw_overlay(c: Control) -> void:
 	var jc := _jump_center()
 	c.draw_circle(jc, JUMP_RADIUS, Color(1, 1, 1, 0.14 + _jump_flash * 0.3))
 	c.draw_arc(jc, JUMP_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
+	c.draw_colored_polygon(PackedVector2Array([jc + Vector2(0, -26), jc + Vector2(26, 16), jc + Vector2(-26, 16)]), Color(1, 1, 1, 0.8))
+
+	# Кнопка «Огонь» слева (только в прицеле)
 	if _aiming:
-		c.draw_circle(jc, JUMP_RADIUS - 10.0, Color(0.9, 0.2, 0.15, 0.55))
-	else:
-		c.draw_colored_polygon(PackedVector2Array([jc + Vector2(0, -26), jc + Vector2(26, 16), jc + Vector2(-26, 16)]), Color(1, 1, 1, 0.8))
+		var fc := _fire_center()
+		c.draw_circle(fc, JUMP_RADIUS, Color(1, 1, 1, 0.14 + _jump_flash * 0.3))
+		c.draw_arc(fc, JUMP_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
+		c.draw_circle(fc, JUMP_RADIUS - 10.0, Color(0.9, 0.2, 0.15, 0.55))
 
 	# Кнопка приседа (горит жёлтым, пока Робин присел)
 	var cc := _crouch_center()
