@@ -222,6 +222,17 @@ func hear(pos: Vector3) -> void:
 	_investigate_t = 4.0
 
 
+# Сценарная тревога: стражник сразу знает, где Робин, и бросается в погоню.
+func force_alert() -> void:
+	asleep = false
+	_stun_t = 0.0
+	state = State.ALERT
+	suspicion = 1.0
+	_lost_timer = 0.0
+	if player != null:
+		_last_seen = player.global_position
+
+
 # Просыпается и сразу бросается в погоню.
 func wake() -> void:
 	if not asleep:

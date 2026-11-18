@@ -7,6 +7,7 @@ signal look_moved(amount: Vector2)
 signal aim_toggled(on: bool)
 signal fire_pressed
 signal interact_pressed
+signal menu_pressed
 signal arrow_type_changed(arrow_type: int)
 
 const STICK_RADIUS := 110.0
@@ -17,6 +18,7 @@ const CROUCH_RADIUS := 58.0
 const BOW_RADIUS := 58.0
 const TYPE_RADIUS := 50.0
 const INTERACT_RADIUS := 66.0
+const MENU_RADIUS := 38.0
 
 # Вектор движения: x вправо, y вперёд-назад (вверх по экрану = минус).
 var move_vector: Vector2 = Vector2.ZERO
@@ -46,6 +48,7 @@ var _type_lbl: Label
 var _fire_lbl: Label
 var _ammo_lbl: Label
 var _interact_lbl: Label
+var _menu_lbl: Label
 var _interact_text: String = ""
 
 
@@ -101,6 +104,7 @@ func _ready() -> void:
 	_type_lbl = _make_button_label("Обычная")
 	_fire_lbl = _make_button_label("Огонь")
 	_fire_lbl.visible = false
+	_menu_lbl = _make_button_label("Меню")
 	_interact_lbl = _make_button_label("")
 	_interact_lbl.visible = false
 	_ammo_lbl = Label.new()
@@ -229,6 +233,11 @@ func reset_touches() -> void:
 	move_vector = Vector2.ZERO
 
 
+func _menu_center() -> Vector2:
+	var s := _vp()
+	return Vector2(s.x - 60.0, 135.0)
+
+
 func _interact_center() -> Vector2:
 	var s := _vp()
 	return Vector2(s.x - 470.0, s.y - 170.0)
@@ -241,7 +250,7 @@ func _rest_stick_center() -> Vector2:
 
 func _process(delta: float) -> void:
 	var vp := _vp()
-	_info.text = "Тест 0.8 ·%d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
+	_info.text = "Тест 0.9 ·%d FPS · %s · 3D x%.2f" % [int(Engine.get_frames_per_second()), RenderingServer.get_video_adapter_name(), get_viewport().scaling_3d_scale]
 	_hint.position = Vector2(0.0, vp.y - 70.0)
 	_hint.size = Vector2(vp.x, 40.0)
 	_light.position = Vector2(0.0, 40.0)
@@ -257,6 +266,7 @@ func _process(delta: float) -> void:
 	_place_label(_type_lbl, _type_center())
 	_place_label(_fire_lbl, _fire_center())
 	_place_label(_interact_lbl, _interact_center())
+	_place_label(_menu_lbl, _menu_center())
 	_fire_lbl.visible = _aiming
 	_bow_lbl.text = "Отмена" if _aiming else "Лук"
 	_type_lbl.text = "Шумовая" if _arrow_type == 1 else "Обычная"
@@ -278,6 +288,9 @@ func _input(event: InputEvent) -> void:
 
 
 func _touch_down(id: int, pos: Vector2) -> void:
+	if pos.distance_to(_menu_center()) <= MENU_RADIUS:
+		menu_pressed.emit()
+		return
 	if _interact_text != "" and pos.distance_to(_interact_center()) <= INTERACT_RADIUS:
 		_jump_flash = 1.0
 		interact_pressed.emit()
@@ -368,6 +381,11 @@ func draw_overlay(c: Control) -> void:
 		c.draw_circle(fc, JUMP_RADIUS, Color(1, 1, 1, 0.14 + _jump_flash * 0.3))
 		c.draw_arc(fc, JUMP_RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.55), 3.0)
 		c.draw_circle(fc, JUMP_RADIUS - 10.0, Color(0.9, 0.2, 0.15, 0.55))
+
+	# Кнопка меню (вверху справа)
+	var mc := _menu_center()
+	c.draw_circle(mc, MENU_RADIUS, Color(1, 1, 1, 0.12))
+	c.draw_arc(mc, MENU_RADIUS, 0.0, TAU, 32, Color(1, 1, 1, 0.5), 2.0)
 
 	# Кнопка действия (золотая)
 	if _interact_text != "":

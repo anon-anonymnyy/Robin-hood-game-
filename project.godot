@@ -8,7 +8,7 @@ config_version=5
 
 config/name="Робин Гуд: Не тот кошелёк"
 config/description="3D-игра про молодого Робина Гуда: стелс, лук, юмор и выбор."
-run/main_scene="res://main.tscn"
+run/main_scene="res://menu.tscn"
 config/features=PackedStringArray("4.4", "Mobile")
 config/icon="res://icon.svg"
 

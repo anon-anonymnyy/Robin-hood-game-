@@ -8,7 +8,7 @@ const GuardScript = preload("res://guard.gd")
 const ArrowScript = preload("res://arrow.gd")
 const DialogueScript = preload("res://dialogue.gd")
 
-const SAVE_PATH := "user://save.cfg"
+const SaveScript = preload("res://save.gd")
 
 const SPAWN := Vector3(0.0, 0.3, -12.5)
 # Кабинет и коридор построены далеко от двора, по оси X.
@@ -169,6 +169,7 @@ func _build_hud() -> void:
 	_hud.connect("aim_toggled", _on_aim_toggled)
 	_hud.connect("fire_pressed", _fire)
 	_hud.connect("interact_pressed", _on_interact)
+	_hud.connect("menu_pressed", _on_menu_pressed)
 	_hud.connect("arrow_type_changed", _on_arrow_type)
 	_player.hud = _hud
 
@@ -181,8 +182,28 @@ func _build_dialogue() -> void:
 	_dlg.choice_made.connect(_on_choice_made)
 
 
+func _on_menu_pressed() -> void:
+	if _dlg.is_active():
+		return
+	_hud.cancel_aim()
+	var lines: Array = [
+		{"who": "Меню", "text": "Выйти в главное меню? Прогресс текущей миссии не сохранится.", "choices": [
+			{"text": "Выйти в меню", "effect": "menu_exit", "reply": []},
+			{"text": "Остаться в игре", "effect": "", "reply": []},
+		]},
+	]
+	_dlg.start(lines, _after_dialogue)
+
+
+func _go_menu() -> void:
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://menu.tscn")
+
+
 func _on_choice_made(effect: String) -> void:
-	if effect == "glory":
+	if effect == "menu_exit":
+		call_deferred("_go_menu")
+	elif effect == "glory":
 		_glory += 1
 	elif effect == "shadow":
 		_shadow += 1
@@ -246,16 +267,19 @@ func _finish_mission() -> void:
 	elif _shadow > _glory:
 		title = "Робин-Тень: его почти никто не видел"
 	_hud.show_message("Миссия 1 пройдена!\nСлава %d · Тень %d\n%s" % [_glory, _shadow, title], 12.0)
-	_hud.set_objective("Тест миссии 1 завершён")
+	_hud.set_objective("Миссия 1 завершена")
 	_save_progress()
+	get_tree().create_timer(14.0).timeout.connect(_go_menu)
 
 
 func _save_progress() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("progress", "mission1_done", true)
-	cfg.set_value("progress", "glory", _glory)
-	cfg.set_value("progress", "shadow", _shadow)
-	cfg.save(SAVE_PATH)
+	var d: Dictionary = SaveScript.load_data()
+	d["mission1_done"] = true
+	d["m1_glory"] = _glory
+	d["m1_shadow"] = _shadow
+	d["glory"] = _glory + int(d["m2_glory"])
+	d["shadow"] = _shadow + int(d["m2_shadow"])
+	SaveScript.write(d)
 
 
 # ---------- Этапы миссии: кабинет, коридор, двор ----------
