@@ -20,6 +20,9 @@ const CATCH_DISTANCE := 1.2
 const NEAR_SENSE := 1.6          # вплотную стражник замечает Робина и без взгляда
 
 var player = null
+var asleep: bool = false         # спит: просыпается от шума рядом
+var chase_speed: float = 5.0     # скорость погони
+var relentless: bool = false     # в тревоге всегда знает, где Робин (для сценарной погони)
 var waypoints: Array = []
 var active: bool = true
 var suspicion: float = 0.0
@@ -41,12 +44,14 @@ var _steer_dir: Vector3 = Vector3.ZERO
 var _steer_t: float = 0.0
 var _investigate_t: float = 0.0
 var _stun_t: float = 0.0
+var _start_asleep: bool = false
 
 
 func _ready() -> void:
 	collision_layer = 4
 	collision_mask = 1
 	_start_pos = position
+	_start_asleep = asleep
 	add_to_group("guards")
 	floor_snap_length = 0.5
 
@@ -89,6 +94,7 @@ func reset() -> void:
 	_steer_t = 0.0
 	_investigate_t = 0.0
 	_stun_t = 0.0
+	asleep = _start_asleep
 	_wp_index = 1 % maxi(waypoints.size(), 1)
 	_face_first_leg()
 
@@ -120,9 +126,21 @@ func _physics_process(delta: float) -> void:
 		if _stun_t <= 0.0:
 			# Пришёл в себя: сразу смотрит в сторону стрелка.
 			state = State.PATROL
-			suspicion = 0.6
+			suspicion = 0.0 if asleep else 0.6
 			_lost_timer = 0.0
 			_last_seen = player.global_position
+		return
+
+	if asleep:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		_apply_gravity(delta)
+		move_and_slide()
+		_update_visuals()
+		var sx: float = player.global_position.x - global_position.x
+		var sz: float = player.global_position.z - global_position.z
+		if sqrt(sx * sx + sz * sz) < player.noise_radius() * 0.5:
+			wake()
 		return
 
 	var rate := _detect()
@@ -145,6 +163,9 @@ func _physics_process(delta: float) -> void:
 	_investigate_t = maxf(_investigate_t - delta, 0.0)
 
 	if state == State.ALERT:
+		if relentless:
+			_lost_timer = 0.0
+			_last_seen = player.global_position
 		if _lost_timer > GIVE_UP_TIME:
 			state = State.PATROL
 			suspicion = 0.2
@@ -183,7 +204,7 @@ func _physics_process(delta: float) -> void:
 			caught.emit()
 			return
 
-	var speed := CHASE_SPEED if state == State.ALERT else (2.4 if _investigate_t > 0.0 else PATROL_SPEED)
+	var speed := chase_speed if state == State.ALERT else (2.4 if _investigate_t > 0.0 else PATROL_SPEED)
 	velocity.x = move_dir.x * speed
 	velocity.z = move_dir.z * speed
 	_try_step_up(delta)
@@ -194,9 +215,23 @@ func _physics_process(delta: float) -> void:
 
 # Другие стражники рядом слышат крик и идут проверять место, где Робина заметили.
 func hear(pos: Vector3) -> void:
+	if asleep:
+		return
 	_last_seen = pos
 	suspicion = maxf(suspicion, 0.8)
 	_investigate_t = 4.0
+
+
+# Просыпается и сразу бросается в погоню.
+func wake() -> void:
+	if not asleep:
+		return
+	asleep = false
+	state = State.ALERT
+	suspicion = 1.0
+	_lost_timer = 0.0
+	_last_seen = player.global_position
+	_alert_neighbors()
 
 
 # Стрела попала в стражника: он оглушён на 5 секунд, ничего не видит и не слышит.
@@ -346,7 +381,7 @@ func _update_visuals() -> void:
 	elif suspicion > 0.02:
 		col = col.lerp(Color(1.0, 0.45, 0.1, 0.26), clampf(suspicion, 0.0, 1.0))
 	_cone_mat.albedo_color = col
-	_cone.visible = _stun_t <= 0.0
+	_cone.visible = _stun_t <= 0.0 and not asleep
 
 	# Конус сжимается, когда Робин в тени или присел: показывает реальную дальность зрения.
 	if player != null:
@@ -355,7 +390,10 @@ func _update_visuals() -> void:
 		_cone.scale = _cone.scale.lerp(Vector3(k, 1.0, k), 0.2)
 
 	var t := ""
-	if _stun_t > 0.0:
+	if asleep:
+		t = "Zzz"
+		_icon.modulate = Color(0.7, 0.85, 1.0)
+	elif _stun_t > 0.0:
 		t = "Ой!"
 		_icon.modulate = Color(0.6, 0.85, 1.0)
 	elif state == State.ALERT:

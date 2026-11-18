@@ -1,6 +1,6 @@
 extends Node3D
-# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.7.
-# Двор замка ночью: стража, свет и тень, лук с мишенями, цель миссии — ворота на юге.
+# Робин Гуд: Не тот кошелёк. Тестовая сборка 0.8.
+# Миссия 1: кабинет шерифа (спящая стража, сундук с печатью), коридор с люстрой, двор замка и ворота.
 
 const PlayerScript = preload("res://player.gd")
 const HudScript = preload("res://hud.gd")
@@ -11,12 +11,23 @@ const DialogueScript = preload("res://dialogue.gd")
 const SAVE_PATH := "user://save.cfg"
 
 const SPAWN := Vector3(0.0, 0.3, -12.5)
+# Кабинет и коридор построены далеко от двора, по оси X.
+const OX := 200.0
+const OFFICE_SPAWN := Vector3(OX + 1.5, 0.3, -4.6)
+const CHASE_SPAWN := Vector3(OX + 4.0, 0.3, -2.0)
+const CHEST_POS := Vector3(OX + 6.0, 0.0, -4.5)
+const DOOR_POS := Vector3(OX + 44.2, 0.0, 0.0)
+const CHAND_X := OX + 30.0
+const LOCK_TIME := 8.0
+const STAGE_OFFICE := 0
+const STAGE_CORRIDOR := 1
+const STAGE_YARD := 2
 const AMMO_NORMAL := 15
 const AMMO_NOISE := 5
 
 const LOOK_SENSITIVITY := 0.006
 const PITCH_MIN := -1.2
-const PITCH_MAX := 0.25
+const PITCH_MAX := 0.55
 
 var _player = null
 var _hud = null
@@ -43,20 +54,35 @@ var _glory: int = 0
 var _shadow: int = 0
 var _caught_count: int = 0
 var _stuns: int = 0
+var _stage: int = STAGE_OFFICE
+var _has_pouch: bool = false
+var _office_guards: Array = []
+var _hall_door: StaticBody3D = null
+var _end_door: StaticBody3D = null
+var _chand: Node3D = null
+var _rope_body: StaticBody3D = null
+var _wreck: StaticBody3D = null
+var _chand_fallen: bool = false
+var _chand_tw: Tween = null
+var _caught_frame: int = -1
+var _picking: bool = false
+var _lock_t: float = 0.0
 
 
 func _ready() -> void:
 	_build_environment()
 	_build_world()
+	_build_office()
 	_spawn_player()
 	_build_camera()
 	_build_hud()
 	_build_dialogue()
 	_spawn_guards()
+	_build_office_guards()
 	_build_goal()
 	_build_targets()
 	_hud.set_ammo(_ammo_normal, _ammo_noise)
-	_hud.set_objective("Цель: добеги до ворот на юге, не попавшись страже")
+	_hud.set_objective("Цель: возьми добычу из сундука у восточной стены. Присев, ты идёшь бесшумно")
 	get_tree().create_timer(0.8).timeout.connect(_play_intro)
 
 
@@ -80,9 +106,11 @@ func _process(delta: float) -> void:
 		_update_assist()
 	_hud.set_aim_hot(_aiming and _assist_on)
 
+	_update_stage(delta)
+
 	var worst := 0.0
 	if not _won:
-		for g in _guards:
+		for g in _all_guards():
 			var s: float = g.suspicion
 			worst = maxf(worst, s)
 	_hud.set_suspicion(worst)
@@ -101,7 +129,7 @@ func _spawn_player() -> void:
 	_player = PlayerScript.new()
 	_player.torch_positions = _torches
 	add_child(_player)
-	_player.respawn(SPAWN)
+	_player.respawn(OFFICE_SPAWN)
 
 
 func _build_camera() -> void:
@@ -140,6 +168,7 @@ func _build_hud() -> void:
 	_hud.connect("crouch_changed", Callable(_player, "set_crouch"))
 	_hud.connect("aim_toggled", _on_aim_toggled)
 	_hud.connect("fire_pressed", _fire)
+	_hud.connect("interact_pressed", _on_interact)
 	_hud.connect("arrow_type_changed", _on_arrow_type)
 	_player.hud = _hud
 
@@ -165,17 +194,16 @@ func _after_dialogue() -> void:
 
 func _play_intro() -> void:
 	var lines: Array = [
-		{"who": "Робин", "text": "Так, спокойно. Я Робин, лучший вор Ноттингема. Ладно, худший. Зато пока живой."},
-		{"who": "Робин", "text": "Лез за золотом, а схватил какой-то мешочек. А в нём печать шерифа. Он теперь очень, очень разозлится."},
-		{"who": "Робин", "text": "Весь двор в страже. Как будем выбираться?", "choices": [
-			{"text": "Эффектно! Пусть вся стража знает моё имя!", "effect": "glory", "reply": [
-				{"who": "Робин", "text": "Если уж убегать, то красиво. Желательно с поклоном."},
+		{"who": "Робин", "text": "План простой: зашёл, взял золото, вышел. Что тут может пойти не так?"},
+		{"who": "Робин", "text": "Двое стражников дремлют у стола. Хм... Как будем действовать?", "choices": [
+			{"text": "Пройду мимо с гордо поднятой головой!", "effect": "glory", "reply": [
+				{"who": "Робин", "text": "Если проснутся, хоть будет что вспомнить. Но лучше не будить."},
 			]},
-			{"text": "Тихо, как мышь. Никто и не заметит.", "effect": "shadow", "reply": [
-				{"who": "Робин", "text": "Тень не оставляет следов. Главное, не топать, как Малыш Джон."},
+			{"text": "Пригнусь и проберусь тихо.", "effect": "shadow", "reply": [
+				{"who": "Робин", "text": "Присед, тишина и ни одного скрипа. Я же профессионал. Почти."},
 			]},
 		]},
-		{"who": "Робин", "text": "Ворота на юге. Лук при мне, мишени во дворе есть. Можно размяться. Но недолго."},
+		{"who": "Робин", "text": "Сундук у восточной стены. Золото, я иду!"},
 	]
 	_dlg.start(lines, _after_dialogue)
 
@@ -230,6 +258,295 @@ func _save_progress() -> void:
 	cfg.save(SAVE_PATH)
 
 
+# ---------- Этапы миссии: кабинет, коридор, двор ----------
+
+func _all_guards() -> Array:
+	return _guards + _office_guards
+
+
+func _flat_dist(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x - b.x, a.z - b.z).length()
+
+
+func _update_stage(delta: float) -> void:
+	if _stage == STAGE_YARD or _won:
+		return
+	var pp: Vector3 = _player.global_position
+	if _stage == STAGE_OFFICE and _has_pouch and pp.x > OX + 8.5:
+		_stage = STAGE_CORRIDOR
+		_hud.set_objective("Дверь в конце коридора заперта: взломай замок (8 сек). Пробеги под люстрой и сбей её стрелой, пока погоня под ней!")
+		_hud.show_message("Беги вперёд! Люстра висит над коридором.", 3.0)
+
+	var txt := ""
+	if not _dlg.is_active():
+		if not _has_pouch and _flat_dist(pp, CHEST_POS) < 2.4:
+			txt = "Взять"
+		elif _has_pouch and not _picking and _stage == STAGE_CORRIDOR and _flat_dist(pp, DOOR_POS) < 3.0:
+			txt = "Взломать"
+	_hud.set_interact(txt)
+
+	if _picking:
+		if _flat_dist(pp, DOOR_POS) > 3.6:
+			_picking = false
+			_hud.show_message("Ты отошёл от двери. Замок снова закрыт.", 2.0)
+			_hud.set_objective("Вернись к двери и взломай замок. Стрелой в люстру останови погоню!")
+		else:
+			_lock_t += delta
+			_hud.set_objective("Взламываю замок: %d%%" % int(clampf(_lock_t / LOCK_TIME, 0.0, 1.0) * 100.0))
+			if _lock_t >= LOCK_TIME:
+				_picking = false
+				_enter_yard()
+
+
+func _on_interact() -> void:
+	if _stage == STAGE_YARD or _won or _dlg.is_active():
+		return
+	var pp: Vector3 = _player.global_position
+	if not _has_pouch and _flat_dist(pp, CHEST_POS) < 2.4:
+		_take_pouch()
+	elif _has_pouch and not _picking and _stage == STAGE_CORRIDOR and _flat_dist(pp, DOOR_POS) < 3.0:
+		_picking = true
+		_lock_t = 0.0
+
+
+func _take_pouch() -> void:
+	_has_pouch = true
+	_hud.set_interact("")
+	_hud.cancel_aim()
+	var lines: Array = [
+		{"who": "Робин", "text": "Тяжёлый мешочек... нет, лёгкий. Это что, не золото? Печать?"},
+		{"who": "Стражник", "text": "Эй! Кто тут шуршит?! Вор! ВОР!"},
+		{"who": "Гай", "text": "Шериф! Печать пропала!"},
+		{"who": "Шериф", "text": "Какая печать?! Та, что заверяет налоги?! Без неё я не могу поднять налоги даже на один пенни!"},
+		{"who": "Робин", "text": "Так. Значит, у меня в руках все налоги Ноттингема. Отлично. Или нет. БЕЖИМ!"},
+	]
+	_dlg.start(lines, _start_chase)
+
+
+func _start_chase() -> void:
+	_hud.reset_touches()
+	if _hall_door != null:
+		_hall_door.queue_free()
+		_hall_door = null
+	for g in _office_guards:
+		g.wake()
+	_hud.set_objective("Беги по коридору к двери! Погоню останови стрелой в люстру")
+	_hud.show_message("Тревога! Стража проснулась!", 2.5)
+
+
+func _enter_yard() -> void:
+	_stage = STAGE_YARD
+	_hud.set_interact("")
+	_hud.cancel_aim()
+	for g in _office_guards:
+		g.queue_free()
+	_office_guards.clear()
+	_player.respawn(SPAWN)
+	_yaw = PI
+	_pitch = -0.35
+	_rig.global_position = SPAWN + Vector3(0.0, 1.5, 0.0)
+	for g in _guards:
+		g.active = true
+		g.reset()
+	_hud.set_objective("Цель: добеги до ворот на юге, не попавшись страже")
+	var lines: Array = [
+		{"who": "Робин", "text": "Двор! Весь в страже, но ворота на юге. Побежали, пока Гай ищет очки."},
+	]
+	_dlg.start(lines, _after_dialogue)
+
+
+func _drop_chandelier() -> void:
+	if _chand_fallen or _chand == null:
+		return
+	# Пока Робин не прошёл под люстрой, ронять её нельзя: она запрёт его вместе со стражей.
+	if _player.global_position.x < CHAND_X + 1.5:
+		_hud.show_message("Рано: люстра должна упасть позади тебя.", 2.0)
+		return
+	_chand_fallen = true
+	if _rope_body != null:
+		_rope_body.queue_free()
+		_rope_body = null
+	_chand_tw = create_tween()
+	_chand_tw.tween_property(_chand, "position:y", -2.1, 0.55).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	_chand_tw.tween_callback(_chandelier_landed)
+
+
+func _chandelier_landed() -> void:
+	if _wreck != null or not _chand_fallen:
+		return
+	_wreck = StaticBody3D.new()
+	_wreck.position = Vector3(CHAND_X, 0.8, 0.0)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(2.4, 1.6, 4.0)
+	cs.shape = shape
+	_wreck.add_child(cs)
+	add_child(_wreck)
+	_hud.show_message("Люстра рухнула! Погоня застряла.", 3.0)
+
+
+func _reset_chandelier() -> void:
+	if _chand_tw != null and _chand_tw.is_valid():
+		_chand_tw.kill()
+	_chand_tw = null
+	if _chand != null:
+		_chand.queue_free()
+		_chand = null
+	if _wreck != null:
+		_wreck.queue_free()
+		_wreck = null
+	_rope_body = null
+	_chand_fallen = false
+	_build_chandelier()
+
+
+func _build_office_guards() -> void:
+	var spots: Array = [Vector3(OX - 3.0, 0.3, 2.0), Vector3(OX - 5.0, 0.3, -1.5)]
+	for sp in spots:
+		var p: Vector3 = sp
+		var g = GuardScript.new()
+		g.waypoints = [p]
+		g.player = _player
+		g.asleep = true
+		g.chase_speed = 3.8
+		g.relentless = true
+		g.position = p
+		add_child(g)
+		g.caught.connect(_on_caught)
+		_office_guards.append(g)
+
+
+# ---------- Кабинет шерифа и коридор ----------
+
+func _build_office() -> void:
+	var stone := Color(0.42, 0.40, 0.44)
+	var wood := Color(0.40, 0.27, 0.15)
+	var dark_wood := Color(0.26, 0.17, 0.10)
+	var floor_col := Color(0.30, 0.22, 0.17)
+	var H := 4.6
+
+	# Пол и потолок.
+	_add_box(Vector3(OX, -0.5, 0.0), Vector3(16.0, 1.0, 14.0), floor_col)
+	_add_box(Vector3(OX, H + 0.25, 0.0), Vector3(16.0, 0.5, 14.0), stone)
+	# Стены кабинета (восточная — с проёмом в коридор).
+	_add_box(Vector3(OX, H * 0.5, -6.5), Vector3(16.0, H, 1.0), stone)
+	_add_box(Vector3(OX, H * 0.5, 6.5), Vector3(16.0, H, 1.0), stone)
+	_add_box(Vector3(OX - 7.5, H * 0.5, 0.0), Vector3(1.0, H, 14.0), stone)
+	_add_box(Vector3(OX + 7.5, H * 0.5, -4.0), Vector3(1.0, H, 5.0), stone)
+	_add_box(Vector3(OX + 7.5, H * 0.5, 4.0), Vector3(1.0, H, 5.0), stone)
+	# Дверь в коридор: закрыта, пока Робин не возьмёт печать.
+	_hall_door = _make_door(Vector3(OX + 7.5, 1.6, 0.0), Vector3(0.4, 3.2, 3.0), dark_wood)
+
+	# Окно с лунным светом на северной стене.
+	_add_deco(_box_mesh(Vector3(2.2, 2.4, 0.1)), Vector3(OX, 2.6, -5.95), Color(0.45, 0.6, 1.0), true)
+
+	# Мебель: стол шерифа, стул, книжные шкафы, ковёр, сундук.
+	_add_box(Vector3(OX - 2.0, 0.45, -4.2), Vector3(3.2, 0.9, 1.4), dark_wood)
+	_add_box(Vector3(OX - 2.0, 0.4, -2.9), Vector3(0.7, 0.8, 0.7), wood)
+	_add_box(Vector3(OX - 6.9, 1.6, -3.0), Vector3(0.6, 3.2, 5.0), wood)
+	_add_box(Vector3(OX - 6.9, 1.6, 4.0), Vector3(0.6, 3.2, 4.0), wood)
+	_add_deco(_cyl_mesh(2.4, 2.4, 0.03, 16), Vector3(OX - 1.0, 0.02, 1.0), Color(0.55, 0.12, 0.14))
+	_add_box(Vector3(CHEST_POS.x, 0.4, CHEST_POS.z), Vector3(1.3, 0.8, 0.8), wood)
+	_add_deco(_box_mesh(Vector3(1.3, 0.08, 0.8)), Vector3(CHEST_POS.x, 0.84, CHEST_POS.z), Color(1.0, 0.8, 0.2), true)
+	# Свечи на столе и подсвеченные зоны.
+	for cx in [-3.0, -1.0]:
+		_add_deco(_cyl_mesh(0.05, 0.05, 0.3, 6), Vector3(OX + cx, 1.05, -4.2), Color(0.95, 0.9, 0.7))
+		_add_deco(_cyl_mesh(0.0, 0.07, 0.14, 6), Vector3(OX + cx, 1.27, -4.2), Color(1.0, 0.65, 0.2), true)
+	_torches.append(Vector3(OX - 2.0, 0.0, -3.0))
+	_torches.append(Vector3(CHEST_POS.x, 0.0, CHEST_POS.z + 1.0))
+
+	# Тёплый свет в кабинете (без теней, дёшево).
+	_add_warm_light(Vector3(OX - 2.0, 2.6, -2.0), 9.0)
+	_add_warm_light(Vector3(OX + 4.0, 2.8, 0.0), 8.0)
+
+	# Коридор: от кабинета на восток до запертой двери.
+	var corr_len := 38.0
+	var cx0 := OX + 7.5 + corr_len * 0.5
+	_add_box(Vector3(cx0, -0.5, 0.0), Vector3(corr_len, 1.0, 6.0), floor_col)
+	_add_box(Vector3(cx0, H + 0.25, 0.0), Vector3(corr_len, 0.5, 6.0), stone)
+	_add_box(Vector3(cx0, H * 0.5, -2.5), Vector3(corr_len, H, 1.0), stone)
+	_add_box(Vector3(cx0, H * 0.5, 2.5), Vector3(corr_len, H, 1.0), stone)
+	_add_box(Vector3(OX + 46.0, H * 0.5, 0.0), Vector3(1.0, H, 6.0), stone)
+	_end_door = _make_door(Vector3(OX + 45.2, 1.6, 0.0), Vector3(0.5, 3.2, 2.4), dark_wood)
+	_add_deco(_box_mesh(Vector3(0.1, 0.3, 0.3)), Vector3(OX + 44.9, 1.5, 0.6), Color(1.0, 0.8, 0.2), true)
+	# Факелы вдоль коридора.
+	for tx in [14.0, 22.0, 38.0]:
+		for sz in [-1.9, 1.9]:
+			_add_deco(_box_mesh(Vector3(0.1, 0.5, 0.1)), Vector3(OX + tx, 2.0, sz), Color(0.25, 0.17, 0.10))
+			_add_deco(_cyl_mesh(0.0, 0.12, 0.3, 6), Vector3(OX + tx, 2.4, sz), Color(1.0, 0.6, 0.2), true)
+	_torches.append(Vector3(OX + 16.0, 0.0, 0.0))
+	_torches.append(Vector3(OX + 40.0, 0.0, 0.0))
+	_add_warm_light(Vector3(OX + 16.0, 3.0, 0.0), 9.0)
+	_add_warm_light(Vector3(OX + 40.0, 3.0, 0.0), 9.0)
+
+	_build_chandelier()
+
+
+func _make_door(pos: Vector3, size: Vector3, color: Color) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.position = pos
+	var mi := MeshInstance3D.new()
+	mi.mesh = _box_mesh(size)
+	mi.material_override = _material(color)
+	body.add_child(mi)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	cs.shape = shape
+	body.add_child(cs)
+	add_child(body)
+	return body
+
+
+func _add_warm_light(pos: Vector3, range_m: float) -> void:
+	var l := OmniLight3D.new()
+	l.position = pos
+	l.light_color = Color(1.0, 0.72, 0.4)
+	l.light_energy = 1.3
+	l.omni_range = range_m
+	l.shadow_enabled = false
+	add_child(l)
+
+
+# Люстра над коридором: стрела в цепь (невидимая коллизия вокруг неё) обрушивает её.
+func _build_chandelier() -> void:
+	_chand = Node3D.new()
+	_chand.position = Vector3(CHAND_X, 0.0, 0.0)
+	add_child(_chand)
+	var gold := Color(0.75, 0.6, 0.2)
+	var chain := MeshInstance3D.new()
+	chain.mesh = _cyl_mesh(0.04, 0.04, 1.7, 6)
+	chain.material_override = _material(Color(0.3, 0.3, 0.32))
+	chain.position = Vector3(0.0, 3.75, 0.0)
+	_chand.add_child(chain)
+	var ring := MeshInstance3D.new()
+	ring.mesh = _cyl_mesh(1.0, 1.0, 0.14, 12)
+	ring.material_override = _material(gold)
+	ring.position = Vector3(0.0, 2.95, 0.0)
+	_chand.add_child(ring)
+	for i in range(6):
+		var a := float(i) / 6.0 * TAU
+		var c := MeshInstance3D.new()
+		c.mesh = _cyl_mesh(0.06, 0.06, 0.28, 6)
+		c.material_override = _material(Color(0.95, 0.9, 0.7))
+		c.position = Vector3(cos(a) * 0.85, 3.16, sin(a) * 0.85)
+		_chand.add_child(c)
+		var f := MeshInstance3D.new()
+		f.mesh = _cyl_mesh(0.0, 0.08, 0.16, 6)
+		f.material_override = _material(Color(1.0, 0.65, 0.2), true)
+		f.position = Vector3(cos(a) * 0.85, 3.38, sin(a) * 0.85)
+		_chand.add_child(f)
+	_rope_body = StaticBody3D.new()
+	_rope_body.position = Vector3(0.0, 3.5, 0.0)
+	_rope_body.add_to_group("rope")
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(1.8, 2.2, 1.8)
+	cs.shape = shape
+	_rope_body.add_child(cs)
+	_chand.add_child(_rope_body)
+
+
 # ---------- Лук ----------
 
 func _on_aim_toggled(on: bool) -> void:
@@ -247,7 +564,7 @@ func _update_assist() -> void:
 	var from: Vector3 = _cam.global_position
 	var fwd: Vector3 = -_cam.global_transform.basis.z
 	var best := deg_to_rad(5.0)
-	for g in _guards:
+	for g in _all_guards():
 		var chest: Vector3 = g.global_position + Vector3(0.0, 1.1, 0.0)
 		var to: Vector3 = chest - from
 		var d := to.length()
@@ -312,6 +629,9 @@ func _on_arrow_hit(collider, pos: Vector3, kind: int) -> void:
 		radius = maxf(radius, 9.0)
 	elif collider != null and collider.is_in_group("targets"):
 		_target_hit(collider)
+		return
+	elif collider != null and collider.is_in_group("rope"):
+		_drop_chandelier()
 		return
 	_make_noise(pos, radius, collider)
 
@@ -407,6 +727,7 @@ func _spawn_guards() -> void:
 		g.waypoints = route
 		g.player = _player
 		g.position = first + Vector3(0.0, 0.3, 0.0)
+		g.active = false
 		add_child(g)
 		g.caught.connect(_on_caught)
 		_guards.append(g)
@@ -439,22 +760,44 @@ func _on_goal_entered(body: Node3D) -> void:
 
 
 func _on_caught() -> void:
-	if _won:
+	if _won or _caught_frame == Engine.get_physics_frames():
 		return
+	_caught_frame = Engine.get_physics_frames()
 	_caught_count += 1
 	_hud.show_message("Тебя поймали! Пробуем ещё раз.", 2.5)
 	if _caught_count == 1:
 		call_deferred("_play_caught_scene")
-	_player.respawn(SPAWN)
-	_yaw = PI
-	_pitch = -0.35
 	_hud.cancel_aim()
+	_picking = false
 	_ammo_normal = AMMO_NORMAL
 	_ammo_noise = AMMO_NOISE
 	_hud.set_ammo(_ammo_normal, _ammo_noise)
-	_rig.global_position = SPAWN + Vector3(0.0, 1.5, 0.0)
-	for g in _guards:
-		g.reset()
+	_pitch = -0.35
+	if _stage == STAGE_YARD:
+		_player.respawn(SPAWN)
+		_yaw = PI
+		_rig.global_position = SPAWN + Vector3(0.0, 1.5, 0.0)
+		for g in _guards:
+			g.reset()
+		return
+
+	# В кабинете или коридоре.
+	_stage = STAGE_OFFICE
+	if _has_pouch:
+		_player.respawn(CHASE_SPAWN)
+		_yaw = -PI * 0.5
+		_rig.global_position = CHASE_SPAWN + Vector3(0.0, 1.5, 0.0)
+		_reset_chandelier()
+		for g in _office_guards:
+			g.reset()
+			g.wake()
+		_hud.set_objective("Беги по коридору к двери! Погоню останови стрелой в люстру")
+	else:
+		_player.respawn(OFFICE_SPAWN)
+		_yaw = PI
+		_rig.global_position = OFFICE_SPAWN + Vector3(0.0, 1.5, 0.0)
+		for g in _office_guards:
+			g.reset()
 
 
 # ---------- Окружение: ночное небо, луна, туман ----------
