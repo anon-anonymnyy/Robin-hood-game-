@@ -20,6 +20,7 @@ const CATCH_DISTANCE := 1.2
 const NEAR_SENSE := 1.6          # вплотную стражник замечает Робина и без взгляда
 
 var player = null
+var dead: bool = false           # убит стрелой
 var asleep: bool = false         # спит: просыпается от шума рядом
 var chase_speed: float = 5.0     # скорость погони
 var relentless: bool = false     # в тревоге всегда знает, где Робин (для сценарной погони)
@@ -45,6 +46,9 @@ var _steer_t: float = 0.0
 var _investigate_t: float = 0.0
 var _stun_t: float = 0.0
 var _start_asleep: bool = false
+var _corpse_alarmed: bool = false
+var _corpse_pos: Vector3 = Vector3.ZERO
+var _fall_tw: Tween = null
 
 
 func _ready() -> void:
@@ -84,6 +88,12 @@ func _ready() -> void:
 
 
 func reset() -> void:
+	if _fall_tw != null and _fall_tw.is_valid():
+		_fall_tw.kill()
+	dead = false
+	_corpse_alarmed = false
+	collision_layer = 4
+	_body.rotation.x = 0.0
 	position = _start_pos
 	velocity = Vector3.ZERO
 	suspicion = 0.0
@@ -108,6 +118,8 @@ func _face_first_leg() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if dead:
+		return
 	if player == null or not active:
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -142,6 +154,12 @@ func _physics_process(delta: float) -> void:
 		if sqrt(sx * sx + sz * sz) < player.noise_radius() * 0.5:
 			wake()
 		return
+
+	# Заметил тело убитого товарища: решает, что тут Робин, и поднимает тревогу.
+	if state != State.ALERT and not _corpse_alarmed and _sees_corpse():
+		_corpse_alarmed = true
+		suspicion = 1.0
+		_last_seen = _corpse_pos
 
 	var rate := _detect()
 	var heard := _hear()
@@ -215,15 +233,56 @@ func _physics_process(delta: float) -> void:
 
 # Другие стражники рядом слышат крик и идут проверять место, где Робина заметили.
 func hear(pos: Vector3) -> void:
-	if asleep:
+	if asleep or dead:
 		return
 	_last_seen = pos
 	suspicion = maxf(suspicion, 0.8)
 	_investigate_t = 4.0
 
 
+# Стрела убила стражника: он падает и больше не двигается.
+func kill() -> void:
+	if dead:
+		return
+	dead = true
+	asleep = false
+	state = State.PATROL
+	suspicion = 0.0
+	velocity = Vector3.ZERO
+	collision_layer = 0
+	_cone.visible = false
+	_icon.text = "x_x"
+	_icon.modulate = Color(0.8, 0.8, 0.8)
+	_fall_tw = create_tween()
+	_fall_tw.tween_property(_body, "rotation:x", -PI * 0.5, 0.4).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+
+
+# Видит ли стражник тело убитого (в конусе обзора, без стен между ними).
+func _sees_corpse() -> bool:
+	var eye := global_position + Vector3(0.0, 1.5, 0.0)
+	var fwd := Vector3(-sin(_yaw), 0.0, -cos(_yaw))
+	for n in get_tree().get_nodes_in_group("guards"):
+		var o = n
+		if o == self or not o.dead:
+			continue
+		var tp: Vector3 = o.global_position + Vector3(0.0, 0.3, 0.0)
+		var flat := Vector3(tp.x - eye.x, 0.0, tp.z - eye.z)
+		var d := flat.length()
+		if d > 9.0 or d < 0.1:
+			continue
+		if d > NEAR_SENSE and fwd.dot(flat / d) < cos(deg_to_rad(VIEW_HALF_ANGLE)):
+			continue
+		var hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(eye, tp, 1))
+		if hit.is_empty():
+			_corpse_pos = o.global_position
+			return true
+	return false
+
+
 # Сценарная тревога: стражник сразу знает, где Робин, и бросается в погоню.
 func force_alert() -> void:
+	if dead:
+		return
 	asleep = false
 	_stun_t = 0.0
 	state = State.ALERT
@@ -235,7 +294,7 @@ func force_alert() -> void:
 
 # Просыпается и сразу бросается в погоню.
 func wake() -> void:
-	if not asleep:
+	if not asleep or dead:
 		return
 	asleep = false
 	state = State.ALERT
@@ -247,6 +306,8 @@ func wake() -> void:
 
 # Стрела попала в стражника: он оглушён на 5 секунд, ничего не видит и не слышит.
 func stun() -> void:
+	if dead:
+		return
 	_stun_t = 5.0
 	state = State.PATROL
 	suspicion = 0.0
@@ -259,7 +320,7 @@ func _alert_neighbors() -> void:
 		if other == self:
 			continue
 		var d: float = other.global_position.distance_to(global_position)
-		if d < ALERT_RADIUS and other.state != State.ALERT:
+		if d < ALERT_RADIUS and other.state != State.ALERT and not other.dead:
 			other.hear(_last_seen)
 
 

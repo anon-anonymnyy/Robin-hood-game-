@@ -3,7 +3,6 @@ extends "res://main.gd"
 # Лук, камера, диалоги и стража берутся из main.gd, здесь только уровень и сюжет.
 
 const StampScript = preload("res://stamp_game.gd")
-const NpcScript = preload("res://npc.gd")
 
 const M2_SPAWN := Vector3(0.0, 0.3, -30.0)
 const GATE_CHECK := Vector3(10.0, 0.3, -3.0)
@@ -44,15 +43,14 @@ func _ready() -> void:
 	_spawn_player()
 	_build_camera()
 	_build_hud()
-	_hud._hint.text = "Подойди к человеку или предмету: слева от кнопки приседа появится золотая кнопка действия. Кнопка «Меню» вверху справа."
 	_build_dialogue()
 	_build_stamp()
 	_spawn_village_guards()
 	_build_npcs()
 	_build_exit_zone()
-	_hud.set_ammo(_ammo_normal, _ammo_noise)
+	_hud.set_ammo(_ammo_normal, _ammo_noise, _ammo_stun)
 	_hud.set_objective("Выслушай Мэриан")
-	get_tree().create_timer(0.8).timeout.connect(_play_m2_intro)
+	_start_card("Миссия 2", "Деревня должников", "Локсли. На следующую ночь.", _play_m2_intro)
 
 
 func _spawn_player() -> void:
@@ -72,11 +70,11 @@ func _build_stamp() -> void:
 
 func _play_m2_intro() -> void:
 	var lines: Array = [
-		{"who": "Мэриан", "text": "Робин! Так это правда? Ты украл печать шерифа?"},
-		{"who": "Робин", "text": "Одолжил. Навсегда. Случайно."},
+		{"who": "Мэриан", "text": "Вот и Локсли. Всю ночь шли, а ты так ни разу и не спросил, зачем мы сюда пришли."},
+		{"who": "Робин", "text": "Я думал, ты ведёшь меня на завтрак."},
 		{"who": "Мэриан", "text": "Ты хоть понимаешь, что держишь в руках? Любая бумага с этим оттиском становится законной. Ты сейчас сильнее самого шерифа."},
 		{"who": "Робин", "text": "Серьёзно? А почему тогда я пахну сеном и прячусь в бочке?"},
-		{"who": "Мэриан", "text": "Потому что ты ей не пользуешься. В деревне Локсли сборщик Счёткин отбирает мельницу за долг. Найди мельника Уилла, он у мельницы на западе."},
+		{"who": "Мэриан", "text": "Потому что ты ей не пользуешься. Здесь сборщик Счёткин отбирает мельницу за долг. Найди мельника Уилла у мельницы на западе. Я пойду с тобой."},
 	]
 	_dlg.start(lines, _after_m2_intro)
 
@@ -84,9 +82,9 @@ func _play_m2_intro() -> void:
 func _after_m2_intro() -> void:
 	_hud.reset_touches()
 	_hud.set_objective("Найди мельника Уилла у мельницы на западе деревни")
+	_hud.show_hint("Подойди к человеку или предмету: слева от кнопки приседа появится золотая кнопка действия. Кнопка «Меню» вверху справа.", 14.0)
 	if _marian != null:
-		_marian.position = Vector3(-17.5, 0.0, 3.2)
-		_marian.rotation_degrees.y = -90.0
+		_marian.set_follow(_player)
 
 
 func _talk_will() -> void:
@@ -101,6 +99,8 @@ func _talk_will() -> void:
 
 func _after_will() -> void:
 	_hud.reset_touches()
+	if _marian != null:
+		_marian.set_follow(null)
 	_m2 = 1
 	_checkpoint = GATE_CHECK
 	_checkpoint_yaw = -PI * 0.5
@@ -208,8 +208,6 @@ func _do_window() -> void:
 
 
 func _finish_shadow() -> void:
-	if _caught_count == 0:
-		_shadow += 1
 	_finish_m2()
 
 
@@ -238,6 +236,7 @@ func _finish_m2() -> void:
 	_won = true
 	for g in _guards:
 		g.active = false
+	_kill_bonuses()
 	var d: Dictionary = SaveScript.load_data()
 	d["mission1_done"] = true
 	d["mission2_done"] = true
@@ -253,9 +252,10 @@ func _finish_m2() -> void:
 	elif _shadow > _glory:
 		title = "Робин-Тень: никто не знает, кто помогает"
 	var coins := "монеты оставил себе" if _coins_kept else "монеты вернул деревне"
-	_hud.show_message("Миссия 2 пройдена!\nСлава %d · Тень %d · %s\n%s" % [_glory, _shadow, coins, title], 14.0)
 	_hud.set_objective("Миссия 2 завершена")
-	get_tree().create_timer(14.0).timeout.connect(_go_menu)
+	_card.show_card("Миссия 2 пройдена", "Слава %d · Тень %d" % [_glory, _shadow], "%s\n%s · %s\nМиссия 3 «Банда» скоро появится." % [title, coins, _kills_text()], [
+		{"text": "В главное меню", "cb": _go_menu},
+	])
 
 
 func _on_choice_made(effect: String) -> void:
@@ -288,7 +288,8 @@ func _on_caught() -> void:
 	_hud.cancel_aim()
 	_ammo_normal = AMMO_NORMAL
 	_ammo_noise = AMMO_NOISE
-	_hud.set_ammo(_ammo_normal, _ammo_noise)
+	_ammo_stun = AMMO_STUN
+	_hud.set_ammo(_ammo_normal, _ammo_noise, _ammo_stun)
 	_pitch = -0.35
 	_player.respawn(_checkpoint)
 	_yaw = _checkpoint_yaw
@@ -376,7 +377,7 @@ func _build_npcs() -> void:
 	add_child(will)
 
 	var marian = NpcScript.new()
-	marian.setup(Color(0.65, 0.25, 0.45), Color(0.25, 0.15, 0.08), "Мэриан", 2)
+	marian.setup(Color(0.65, 0.25, 0.45), Color(0.25, 0.15, 0.08), "Мэриан", 2, false)
 	marian.position = Vector3(2.0, 0.0, -28.0)
 	marian.rotation_degrees.y = 180.0
 	add_child(marian)

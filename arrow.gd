@@ -83,12 +83,20 @@ func _build_model() -> void:
 	tip.height = 0.16
 	tip.radial_segments = 6
 	tip.rings = 1
-	var tip_col := Color(0.75, 0.78, 0.82) if arrow_type == 0 else Color(0.35, 0.65, 1.0)
+	var tip_col := Color(0.75, 0.78, 0.82)
+	if arrow_type == 1:
+		tip_col = Color(0.35, 0.65, 1.0)
+	elif arrow_type == 2:
+		tip_col = Color(0.4, 1.0, 0.5)
 	_add_part(tip, tip_col, Vector3(0.0, 0.0, -0.52))
 
 	var fin := BoxMesh.new()
 	fin.size = Vector3(0.12, 0.01, 0.16)
-	var fin_col := Color(0.9, 0.88, 0.8) if arrow_type == 0 else Color(0.5, 0.8, 1.0)
+	var fin_col := Color(0.9, 0.88, 0.8)
+	if arrow_type == 1:
+		fin_col = Color(0.5, 0.8, 1.0)
+	elif arrow_type == 2:
+		fin_col = Color(0.6, 1.0, 0.65)
 	_add_part(fin, fin_col, Vector3(0.0, 0.0, 0.38))
 
 
@@ -97,7 +105,7 @@ func _add_part(mesh: Mesh, color: Color, pos: Vector3) -> void:
 	mi.mesh = mesh
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
-	if arrow_type == 1:
+	if arrow_type != 0:
 		mat.emission_enabled = true
 		mat.emission = color
 		mat.emission_energy_multiplier = 1.5

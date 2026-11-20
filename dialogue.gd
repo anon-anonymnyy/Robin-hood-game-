@@ -23,6 +23,7 @@ var _current: Dictionary = {}
 var _typing: bool = false
 var _showing_choices: bool = false
 var _shown: float = 0.0
+var _ignore_until: int = 0
 
 var _root: Control
 var _name_lbl: Label
@@ -124,6 +125,8 @@ func start(lines: Array, on_done: Callable = Callable()) -> void:
 		return
 	_queue = lines.duplicate()
 	_on_done = on_done
+	_ignore_until = Time.get_ticks_msec() + 350
+	get_tree().call_group("hud", "hide_hint")
 	_tag_lbl.text = ""
 	visible = true
 	get_tree().paused = true
@@ -231,7 +234,7 @@ func _on_gui_input(event: InputEvent) -> void:
 
 
 func _tap() -> void:
-	if _showing_choices:
+	if _showing_choices or Time.get_ticks_msec() < _ignore_until:
 		return
 	if _typing:
 		_finish_typing()

@@ -9,6 +9,8 @@ const ArrowScript = preload("res://arrow.gd")
 const DialogueScript = preload("res://dialogue.gd")
 
 const SaveScript = preload("res://save.gd")
+const NpcScript = preload("res://npc.gd")
+const TitleScript = preload("res://title_card.gd")
 
 const SPAWN := Vector3(0.0, 0.3, -12.5)
 # Кабинет и коридор построены далеко от двора, по оси X.
@@ -24,6 +26,7 @@ const STAGE_CORRIDOR := 1
 const STAGE_YARD := 2
 const AMMO_NORMAL := 15
 const AMMO_NOISE := 5
+const AMMO_STUN := 5
 
 const LOOK_SENSITIVITY := 0.006
 const PITCH_MIN := -1.2
@@ -45,6 +48,9 @@ var _aim_t: float = 0.0
 var _arrow_type: int = 0
 var _ammo_normal: int = AMMO_NORMAL
 var _ammo_noise: int = AMMO_NOISE
+var _ammo_stun: int = AMMO_STUN
+var _kills: int = 0
+var _card = null
 var _shot_cd: float = 0.0
 var _assist_on: bool = false
 var _assist_point: Vector3 = Vector3.ZERO
@@ -81,9 +87,9 @@ func _ready() -> void:
 	_build_office_guards()
 	_build_goal()
 	_build_targets()
-	_hud.set_ammo(_ammo_normal, _ammo_noise)
+	_hud.set_ammo(_ammo_normal, _ammo_noise, _ammo_stun)
 	_hud.set_objective("Цель: возьми добычу из сундука у восточной стены. Присев, ты идёшь бесшумно")
-	get_tree().create_timer(0.8).timeout.connect(_play_intro)
+	_start_card("Миссия 1", "Побег из кабинета", "Ночь. Замок шерифа Ноттингема.", _play_intro)
 
 
 func _process(delta: float) -> void:
@@ -179,6 +185,8 @@ func _build_hud() -> void:
 func _build_dialogue() -> void:
 	_dlg = DialogueScript.new()
 	add_child(_dlg)
+	_card = TitleScript.new()
+	add_child(_card)
 	_dlg.choice_made.connect(_on_choice_made)
 
 
@@ -213,6 +221,16 @@ func _after_dialogue() -> void:
 	_hud.reset_touches()
 
 
+func _after_intro() -> void:
+	_hud.reset_touches()
+	_hud.show_hint("Бег шумит: стража слышит тебя. Присед (кнопка внизу справа) делает шаги бесшумными. «Лук» — прицел, слева появится «Огонь».", 14.0)
+
+
+# Заставка с названием миссии; когда закроется — вызывает on_done.
+func _start_card(title: String, sub: String, body: String, on_done: Callable) -> void:
+	_card.show_card(title, sub, body, [], 3.2, on_done)
+
+
 func _play_intro() -> void:
 	var lines: Array = [
 		{"who": "Робин", "text": "План простой: зашёл, взял золото, вышел. Что тут может пойти не так?"},
@@ -226,7 +244,7 @@ func _play_intro() -> void:
 		]},
 		{"who": "Робин", "text": "Сундук у восточной стены. Золото, я иду!"},
 	]
-	_dlg.start(lines, _after_dialogue)
+	_dlg.start(lines, _after_intro)
 
 
 func _play_caught_scene() -> void:
@@ -238,10 +256,16 @@ func _play_caught_scene() -> void:
 
 
 func _play_ending() -> void:
+	# Мэриан ждёт в тени у ворот.
+	var marian = NpcScript.new()
+	marian.setup(Color(0.65, 0.25, 0.45), Color(0.25, 0.15, 0.08), "Мэриан", 2, false)
+	marian.position = Vector3(4.6, 0.0, 24.2)
+	marian.rotation_degrees.y = 90.0
+	add_child(marian)
 	var lines: Array = [
-		{"who": "Мэриан", "text": "Робин?! Это печать шерифа?! Ты украл печать шерифа?!"},
-		{"who": "Робин", "text": "Украл, это громко сказано. Одолжил. Навсегда. Случайно."},
-		{"who": "Мэриан", "text": "И что ты собираешься с ней делать?", "choices": [
+		{"who": "Мэриан", "text": "Псс! Робин! Я видела, как на стенах зажгли тревогу. Ты что, учудил что-то в кабинете шерифа?"},
+		{"who": "Робин", "text": "Учудил. Смотри: это печать, которой шериф заверяет налоги. Я взял её вместо золота."},
+		{"who": "Мэриан", "text": "Печать шерифа?! Робин, это же... Что ты собираешься с ней делать?", "choices": [
 			{"text": "Раздам бедным! Пусть весь Ноттингем узнает!", "effect": "glory", "reply": [
 				{"who": "Мэриан", "text": "Весь Ноттингем и вся стража заодно. Ты слышал слово «тайна»?"},
 				{"who": "Робин", "text": "Слышал. Не запомнил."},
@@ -251,25 +275,54 @@ func _play_ending() -> void:
 				{"who": "Робин", "text": "Я сам в шоке."},
 			]},
 		]},
+		{"who": "Мэриан", "text": "Идём скорее, пока стража не опомнилась. Я знаю деревню, где эта печать нужна больше всего."},
 	]
 	_dlg.start(lines, _finish_mission)
 
 
+# Сколько стражников сейчас убито (после поимки их оживляют, и счёт обнуляется).
+func _dead_count() -> int:
+	var n := 0
+	for g in _all_guards():
+		if g.dead:
+			n += 1
+	return n
+
+
+func _kill_bonuses() -> void:
+	var k := _dead_count()
+	if _caught_count == 0 and k == 0:
+		_shadow += 1
+	if k >= 3:
+		_glory += 1
+
+
+func _kills_text() -> String:
+	var k := _dead_count()
+	if k == 0:
+		return "Никого не убито: лучник-пацифист."
+	return "Стражников убито: %d." % k
+
+
 func _finish_mission() -> void:
 	_hud.reset_touches()
-	if _caught_count == 0:
-		_shadow += 1
-	if _stuns >= 2:
-		_glory += 1
+	_hud.set_interact("")
+	_kill_bonuses()
 	var title := "Загадочный Робин: и шум, и тишина"
 	if _glory > _shadow:
 		title = "Громкий Робин: о нём говорит весь город"
 	elif _shadow > _glory:
 		title = "Робин-Тень: его почти никто не видел"
-	_hud.show_message("Миссия 1 пройдена!\nСлава %d · Тень %d\n%s" % [_glory, _shadow, title], 12.0)
-	_hud.set_objective("Миссия 1 завершена")
 	_save_progress()
-	get_tree().create_timer(14.0).timeout.connect(_go_menu)
+	_card.show_card("Миссия 1 пройдена", "Слава %d · Тень %d" % [_glory, _shadow], "%s\n%s" % [title, _kills_text()], [
+		{"text": "Дальше: миссия 2", "cb": _go_mission2},
+		{"text": "В главное меню", "cb": _go_menu},
+	])
+
+
+func _go_mission2() -> void:
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://mission2.tscn")
 
 
 func _save_progress() -> void:
@@ -589,6 +642,8 @@ func _update_assist() -> void:
 	var fwd: Vector3 = -_cam.global_transform.basis.z
 	var best := deg_to_rad(5.0)
 	for g in _all_guards():
+		if g.dead:
+			continue
 		var chest: Vector3 = g.global_position + Vector3(0.0, 1.1, 0.0)
 		var to: Vector3 = chest - from
 		var d := to.length()
@@ -608,15 +663,21 @@ func _update_assist() -> void:
 func _fire() -> void:
 	if not _aiming or _shot_cd > 0.0 or _won:
 		return
-	var noisy := _arrow_type == 1
-	if (_ammo_noise if noisy else _ammo_normal) <= 0:
+	var left := _ammo_normal
+	if _arrow_type == 1:
+		left = _ammo_noise
+	elif _arrow_type == 2:
+		left = _ammo_stun
+	if left <= 0:
 		_hud.show_message("Стрелы этого типа кончились", 1.5)
 		return
-	if noisy:
+	if _arrow_type == 0:
+		_ammo_normal -= 1
+	elif _arrow_type == 1:
 		_ammo_noise -= 1
 	else:
-		_ammo_normal -= 1
-	_hud.set_ammo(_ammo_normal, _ammo_noise)
+		_ammo_stun -= 1
+	_hud.set_ammo(_ammo_normal, _ammo_noise, _ammo_stun)
 	_shot_cd = 0.45
 
 	# Целимся туда, куда смотрит перекрестие камеры, и учитываем падение стрелы на лету.
@@ -648,8 +709,13 @@ func _fire() -> void:
 func _on_arrow_hit(collider, pos: Vector3, kind: int) -> void:
 	var radius := 22.0 if kind == 1 else 6.0
 	if collider != null and collider.is_in_group("guards"):
-		collider.stun()
-		_stuns += 1
+		if kind == 0:
+			collider.kill()
+			_kills += 1
+			_hud.show_message("Стражник прилёг отдохнуть. Навсегда.", 2.0)
+		elif kind == 2:
+			collider.stun()
+			_stuns += 1
 		radius = maxf(radius, 9.0)
 	elif collider != null and collider.is_in_group("targets"):
 		_target_hit(collider)
@@ -663,7 +729,7 @@ func _on_arrow_hit(collider, pos: Vector3, kind: int) -> void:
 # Удар стрелы слышат стражники в радиусе: они идут проверять место удара.
 func _make_noise(pos: Vector3, radius: float, skip) -> void:
 	for g in _guards:
-		if g == skip:
+		if g == skip or g.dead:
 			continue
 		var d: float = g.global_position.distance_to(pos)
 		if d < radius:
@@ -795,7 +861,8 @@ func _on_caught() -> void:
 	_picking = false
 	_ammo_normal = AMMO_NORMAL
 	_ammo_noise = AMMO_NOISE
-	_hud.set_ammo(_ammo_normal, _ammo_noise)
+	_ammo_stun = AMMO_STUN
+	_hud.set_ammo(_ammo_normal, _ammo_noise, _ammo_stun)
 	_pitch = -0.35
 	if _stage == STAGE_YARD:
 		_player.respawn(SPAWN)

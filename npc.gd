@@ -1,9 +1,16 @@
-extends Node3D
-# Персонаж-заглушка из простых форм (стоит на месте, с именем над головой).
+extends CharacterBody3D
+# Персонаж из простых форм с именем над головой. Может идти за Робином (set_follow).
+
+var follow_target: Node3D = null
+var follow_speed: float = 4.3
+var follow_dist: float = 2.6
 
 
-func setup(shirt: Color, hat_col: Color, label: String, hat_style: int = 0) -> void:
-	var skin := Color(0.90, 0.72, 0.58)
+func setup(shirt: Color, hat_col: Color, label: String, hat_style: int = 0, blocking: bool = true) -> void:
+	collision_layer = 1 if blocking else 0
+	collision_mask = 1
+	set_physics_process(false)
+
 	var legs := BoxMesh.new()
 	legs.size = Vector3(0.42, 0.4, 0.22)
 	_part(legs, Color(0.30, 0.22, 0.14), Vector3(0.0, 0.2, 0.0))
@@ -11,6 +18,7 @@ func setup(shirt: Color, hat_col: Color, label: String, hat_style: int = 0) -> v
 	torso.radius = 0.30
 	torso.height = 1.0
 	_part(torso, shirt, Vector3(0.0, 0.82, 0.0))
+	var skin := Color(0.90, 0.72, 0.58)
 	var head := SphereMesh.new()
 	head.radius = 0.2
 	head.height = 0.4
@@ -40,15 +48,13 @@ func setup(shirt: Color, hat_col: Color, label: String, hat_style: int = 0) -> v
 		top.height = 0.3
 		_part(top, hat_col, Vector3(0.0, 1.6, 0.0))
 
-	var body := StaticBody3D.new()
 	var cs := CollisionShape3D.new()
 	var shape := CylinderShape3D.new()
 	shape.radius = 0.4
 	shape.height = 1.8
 	cs.shape = shape
 	cs.position = Vector3(0.0, 0.9, 0.0)
-	body.add_child(cs)
-	add_child(body)
+	add_child(cs)
 
 	var tag := Label3D.new()
 	tag.text = label
@@ -59,6 +65,41 @@ func setup(shirt: Color, hat_col: Color, label: String, hat_style: int = 0) -> v
 	tag.outline_size = 24
 	tag.position = Vector3(0.0, 2.35, 0.0)
 	add_child(tag)
+
+
+# Идти за целью (Робином); null — остановиться на месте.
+func set_follow(t: Node3D) -> void:
+	follow_target = t
+	set_physics_process(t != null)
+
+
+func _physics_process(delta: float) -> void:
+	if follow_target == null:
+		return
+	var to: Vector3 = follow_target.global_position - global_position
+	to.y = 0.0
+	var d := to.length()
+	if d > 16.0:
+		# Отстала слишком сильно: догоняет мгновенно, чтобы не потеряться.
+		var back := Basis(Vector3.UP, follow_target.rotation.y) * Vector3(1.5, 0.0, 2.0)
+		global_position = follow_target.global_position + back
+		velocity = Vector3.ZERO
+		return
+	if d > follow_dist:
+		var dir := to / d
+		velocity.x = dir.x * follow_speed
+		velocity.z = dir.z * follow_speed
+		rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(8.0 * delta, 0.0, 1.0))
+	else:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		var face := to.normalized() if d > 0.1 else Vector3(0.0, 0.0, -1.0)
+		rotation.y = lerp_angle(rotation.y, atan2(-face.x, -face.z), clampf(5.0 * delta, 0.0, 1.0))
+	if is_on_floor():
+		velocity.y = 0.0
+	else:
+		velocity.y -= 16.0 * delta
+	move_and_slide()
 
 
 func _part(mesh: Mesh, color: Color, pos: Vector3) -> void:
